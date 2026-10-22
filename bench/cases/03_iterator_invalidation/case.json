@@ -1,0 +1,14 @@
+{
+  "id": "03_iterator_invalidation",
+  "title": "Iterator invalidated by push_back",
+  "lang": "cpp",
+  "std": "c++17",
+  "editable": "buggy.cpp",
+  "reference": "reference_fix.cpp",
+  "test": "test.cpp",
+  "hidden_test": "hidden_test.cpp",
+  "sanitizers": ["address", "undefined"],
+  "extra_flags": ["-D_GLIBCXX_ASSERTIONS"],
+  "expected_buggy_stage": "sanitizer",
+  "description": "push_back reallocates the vector, so the loop's iterator is left pointing at freed memory."
+}

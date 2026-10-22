@@ -1,0 +1,13 @@
+{
+  "id": "02_signed_overflow",
+  "title": "Signed overflow in midpoint",
+  "lang": "c",
+  "std": "c11",
+  "editable": "buggy.c",
+  "reference": "reference_fix.c",
+  "test": "test.c",
+  "hidden_test": "hidden_test.c",
+  "sanitizers": ["address", "undefined"],
+  "expected_buggy_stage": "sanitizer",
+  "description": "midpoint adds in int, which overflows, and truncates toward zero instead of flooring."
+}

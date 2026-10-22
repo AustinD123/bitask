@@ -1,0 +1,6 @@
+{
+  "01_heap_overflow": {"file": "01_heap_overflow.c", "visible": "ok", "hidden": "sanitizer"},
+  "02_signed_overflow": {"file": "02_signed_overflow.c", "visible": "ok", "hidden": "sanitizer"},
+  "03_iterator_invalidation": {"file": "03_iterator_invalidation.cpp", "visible": "sanitizer", "hidden": "sanitizer"},
+  "04_data_race": {"file": "04_data_race.c", "visible": "ok", "hidden": "test_fail"}
+}

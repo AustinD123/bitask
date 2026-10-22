@@ -681,4 +681,52 @@ Do not match filenames in compiler output.
 
 **Budget**
 
-- `verifyloop/` is 441 code lines (`toolchain.py` 322, `case.py` 119). That is over the ~300 target. The overage and the proposed cuts are reported in Phase 3 and not made silently.
+- Original guideline: the Constraints section says the harness should be about 250 lines, excluding tests and cases. The Phase 0 target was about 300 code lines in `verifyloop/`, excluding docstrings, comments and blank lines.
+- Actual at the end of Phase 3: 441 code lines (`toolchain.py` 322, `case.py` 119). The Phase 3 report proposed cuts. The Phase 3 review decided not to cut features.
+- **New budget: about 450 code lines for `case.py` and `toolchain.py` together.** Both are at about 441 now.
+- Why we exceed the original guideline: the verification layer is the product. The spec's own feature list (three-step compile, TSan preflight, bounded output capture, a classifier that stays pure, deterministic cleaning, and the sanitizer summaries) cannot fit in 250 lines without dropping features the spec requires.
+- Free cuts already made in Phase 4: `new_nonce` is inlined, and shadow-byte removal is one regex.
+- Budgets for later phases: `cli.py` about 60 lines. The LLM client and retry loop about 150 lines. The benchmark runner about 100 lines.
+
+## Decisions (Phase 4)
+
+**Cleaning (start of Phase 4)**
+
+- Stack frames that have no source location are dropped from cleaned output. Those are libc, allocator interceptor and startup frames. Frames with a location keep it, and their `(test_bin+0x...)` and `(BuildId: ...)` suffixes are stripped. Frame numbers are kept as printed. The raw output is unchanged in `raw_stdout` and `raw_stderr`.
+- The shadow-byte block is removed with one regex.
+- `new_nonce` is inlined.
+
+**Harness bug found by the starter cases (fixed)**
+
+- `_build` compiled `case.test` even when `test="hidden"` was asked for, so the hidden test was never compiled. Starter tests showed it as `harness_error`. Earlier, the "buggy does not pass hidden" check had passed for that wrong reason. `_build` now takes the test filename. A regression test (`test_hidden_test_is_the_one_compiled_and_run`) proves that the hidden test is the one compiled and run.
+
+**Naive fix for case 01 (changed from the spec)**
+
+- The spec's naive fix is `malloc(total + 1)` with `total = n - 1` kept. It is **not caught** under ASan: with `n == 0`, `total + 1` is 0, and `malloc(0)` returns a one-byte allocation that ASan accepts, so the terminator write is in bounds and nothing is reported. It is still undefined behaviour by the C standard. The fixture is kept as a note in `naive_fixes/01_heap_overflow.c`.
+- The naive fix used for the suite is a common over-correction: `if (n == 0) return NULL;` in front of the otherwise correct length calculation. It passes the visible test, and the hidden test's `n == 0` case dereferences NULL. The hidden stage is `sanitizer` (UBSan's nonnull check fires first).
+
+**Recorded naive stages** (`tests/fixtures/naive_fixes/manifest.json`)
+
+| Case | Visible | Hidden | Notes |
+| --- | --- | --- | --- |
+| 01 | ok | sanitizer | NULL guard; UBSan nonnull check |
+| 02 | ok | sanitizer | `a + (b - a) / 2`; UBSan overflow on `b - a` |
+| 03 | sanitizer | sanitizer | Index loop re-reads `size()`; UBSan overflow on doubling |
+| 04 | ok | test_fail | Atomic, not reset; second call returns 41000 |
+
+- For 03 the naive fix fails the visible test, not by timing out. It visits appended elements, the value doubles on each pass, and it overflows.
+- The `volatile` variant of 04 (`04_data_race_volatile.c`) is kept deliberately. It fails the visible test under TSan with a data race. This is the one fixture where `volatile` is the point of the case.
+
+**Buggy stages worth noting**
+
+- 02 buggy: the visible test gives UBSan `signed integer overflow`. The hidden test gives `test_fail` (`midpoint(INT_MIN, INT_MAX)` returns 0), not a sanitizer report, because `INT_MIN + INT_MAX` does not overflow.
+- 01 buggy, hidden: stage `sanitizer`, from `allocation-size-too-big` in `malloc(SIZE_MAX)`. The visible test gives `heap-buffer-overflow` with the object-size flag in place.
+- 03 buggy, hidden: stage `sanitizer`, from UBSan overflow on the spare-capacity case, not from a use-after-free.
+
+**Standards**
+
+- All cases keep the standard from the spec: c11 for 01, 02 and 04, and c++17 for 03. Nothing needed changing.
+
+**Deferred**
+
+- `NOTES.md` is written in Phase 6, after the outputs are final. The starter-case suite does not check for it.

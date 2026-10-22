@@ -1,0 +1,16 @@
+{
+  "id": "04_data_race",
+  "title": "Unsynchronised counter in parallel_count",
+  "lang": "c",
+  "std": "c11",
+  "editable": "buggy.c",
+  "reference": "reference_fix.c",
+  "test": "test.c",
+  "hidden_test": "hidden_test.c",
+  "sanitizers": ["thread"],
+  "extra_flags": ["-pthread"],
+  "runs": 5,
+  "timeout_s": 20,
+  "expected_buggy_stage": "sanitizer",
+  "description": "Worker threads increment a shared counter without synchronisation, so updates are lost and TSan reports a race."
+}

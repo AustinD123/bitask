@@ -210,6 +210,15 @@ def test_correct_candidate_passes() -> None:
     assert result.duration_s > 0
 
 
+def test_hidden_test_is_the_one_compiled_and_run() -> None:
+    # Passes the visible test (2, 3), fails the hidden one at add(0, 0).
+    narrow = '#include "lib.h"\nint add(int a, int b) { if (a == 0 && b == 0) return 1; return a + b; }\n'
+    assert verify(narrow, MINI).stage == "ok"
+    hidden = verify(narrow, MINI, test="hidden")
+    assert hidden.stage == "test_fail"
+    assert "add(0, 0) == 0" in hidden.output
+
+
 def test_syntax_error_is_compile_error() -> None:
     result = verify(SYNTAX, MINI)
     assert result.stage == "compile_error"
@@ -337,6 +346,10 @@ def test_deterministic_output_for_asan() -> None:
     assert first.output == second.output
     assert "verify-" not in first.output  # no workdir path
     assert not re.search(r"0x[0-9a-f]{6,}", first.output)
+    assert "libc" not in first.output  # runtime frames without a source location are dropped
+    assert "BuildId" not in first.output
+    assert "heap-buffer-overflow" in first.output  # the raw output still has the full report
+    assert "libc" in first.raw_stderr
 
 
 def test_deterministic_output_for_tsan(tmp_path: Path) -> None:
@@ -655,6 +668,33 @@ def test_text_before_the_report_is_dropped() -> None:
     cleaned = clean_output(report, None)
     assert cleaned.startswith("==PID==ERROR: AddressSanitizer: heap-use-after-free")
     assert "compiler noise" not in cleaned
+
+
+def test_frames_without_a_source_location_are_dropped() -> None:
+    report = (
+        "==1==ERROR: AddressSanitizer: heap-buffer-overflow on address 0x502000000018\n"
+        "    #0 0x1 in malloc (test_bin+0xc71a3) (BuildId: abc123)\n"
+        "    #1 0x2 in add buggy.c:7:16\n"
+        "    #2 0x3  (/lib/x86_64-linux-gnu/libc.so.6+0x2a1c9) (BuildId: abc123)\n"
+        "    #3 0x4 in _start (test_bin+0x2c354) (BuildId: abc123)\n"
+        "SUMMARY: AddressSanitizer: heap-buffer-overflow buggy.c:7:16 in add\n"
+    )
+    cleaned = clean_output(report, None)
+    assert "malloc" not in cleaned and "libc" not in cleaned and "_start" not in cleaned
+    assert "    #1 0x2 in add buggy.c:7:16" in cleaned  # short addresses are not masked
+
+
+def test_frame_suffixes_are_stripped_and_numbering_kept() -> None:
+    report = (
+        "WARNING: ThreadSanitizer: data race (pid=23)\n"
+        "    #0 worker buggy.c:8:43 (test_bin+0xdeca6) (BuildId: db33c331c7e7)\n"
+        "    #1 add buggy.c:15:5 (test_bin+0xdec2b) (BuildId: db33c331c7e7)\n"
+        "SUMMARY: ThreadSanitizer: data race buggy.c:8:43 in worker\n"
+    )
+    cleaned = clean_output(report, None)
+    assert "    #0 worker buggy.c:8:43\n" in cleaned + "\n"
+    assert "    #1 add buggy.c:15:5\n" in cleaned + "\n"
+    assert "test_bin+" not in cleaned and "BuildId" not in cleaned
 
 
 def test_truncation_appends_the_count() -> None:

@@ -61,7 +61,11 @@ _TID = re.compile(r"\btid=\d+")
 # debug info, so it differs between runs of identical source. Masked; see docs/harness.md.
 _BUILD_ID = re.compile(r"BuildId: [0-9a-f]+")
 _REPORT_START = re.compile(r"ERROR: (AddressSanitizer|LeakSanitizer)|WARNING: ThreadSanitizer|runtime error:")
-_SHADOW_START = "Shadow bytes around the buggy address:"
+# From the shadow-byte header to the SUMMARY line (or the end of the text), exclusive.
+_SHADOW = re.compile(r"Shadow bytes around the buggy address:.*?(?=^SUMMARY:|\Z)", re.S | re.M)
+_FRAME = re.compile(r"^\s*#\d+ ")
+_SOURCE_LOC = re.compile(r"\b[\w./-]+\.(?:c|cpp|h|hpp):\d+")
+_FRAME_SUFFIX = re.compile(r" \((?:test_bin\+0x[0-9a-f]+|BuildId: BUILDID)\)")
 
 
 @dataclass
@@ -216,11 +220,6 @@ def clean_output(text: str, workdir: Path | None, max_chars: int = MAX_OUTPUT_CH
     return _truncate(_clean(text, workdir), max_chars)
 
 
-def new_nonce() -> str:
-    """Return a fresh completion-marker nonce: 16 hex characters."""
-    return secrets.token_hex(8)
-
-
 def _verify_in(
     workdir: Path, case: Case, source_code: str, test_name: str, start: float, keep: bool,
 ) -> VerifyResult:
@@ -229,7 +228,7 @@ def _verify_in(
     shutil.copy(case.directory / test_name, workdir / test_name)
     (workdir / case.editable).write_text(source_code, encoding="utf-8")
 
-    stage, message, compile_stderr, cmd = _build(case, workdir)
+    stage, message, compile_stderr, cmd = _build(case, workdir, test_name)
     if stage:
         compiled = False if stage == "compile_error" else None
         return _result(case, workdir, stage, start, keep, message=message,
@@ -239,7 +238,7 @@ def _verify_in(
     stdout = stderr = ""
     code: int | None = None
     for run in range(1, case.runs + 1):
-        nonce = new_nonce()
+        nonce = secrets.token_hex(8)  # fresh per run; 16 hex characters
         stdout, stderr, code, timed_out = _run_once(workdir, nonce, case.timeout_s)
         stage, message = classify_run(stdout, stderr, code, timed_out, nonce)
         if stage == "timeout":
@@ -253,16 +252,17 @@ def _verify_in(
                    runs_completed=completed, cmd=cmd, compiled=True)
 
 
-def _build(case: Case, workdir: Path) -> tuple[str | None, str, str, list[str]]:
+def _build(case: Case, workdir: Path, test_name: str) -> tuple[str | None, str, str, list[str]]:
     """Compile the test, then the candidate, then link. Returns (stage, message, stderr, cmd).
 
+    ``test_name`` is the visible or hidden test file, already copied into the workdir.
     ``stage`` is None when all three steps succeed. ``cmd`` is the step that
     failed, or the link command when everything succeeded.
     """
     cc = _compiler_for(case)
     flags = _compile_flags(case, workdir)
     steps = [
-        ("test", [cc, *flags, "-c", case.test, "-o", "test.o"]),
+        ("test", [cc, *flags, "-c", test_name, "-o", "test.o"]),
         ("candidate", [cc, *flags, "-c", case.editable, "-o", "candidate.o"]),
         ("link", [cc, *flags, "candidate.o", "test.o", "-o", "test_bin"]),
     ]
@@ -415,20 +415,22 @@ def _clean(text: str, workdir: Path | None) -> str:
     if start is not None:
         end = next((i for i in range(start, len(lines)) if lines[i].startswith("SUMMARY:")), len(lines) - 1)
         lines = lines[start:end + 1]
-    kept, skipping = [], False
-    for line in lines:
-        if _SHADOW_START in line:
-            skipping = True
-        if line.startswith("SUMMARY:"):
-            skipping = False
-        if not skipping:
-            kept.append(line)
-    text = "\n".join(kept)
+    text = _SHADOW.sub("", "\n".join(lines))
     text = _HEX_ADDR.sub("0xADDR", text)
     text = _PID_PREFIX.sub("==PID==", text)
     text = _PID.sub("pid=PID", text)
     text = _BUILD_ID.sub("BuildId: BUILDID", text)
-    return _TID.sub("tid=TID", text)
+    text = _TID.sub("tid=TID", text)
+    kept = []
+    for line in text.splitlines():
+        if _FRAME.match(line):
+            # Frames without a source location are libc, the allocator and
+            # startup code. They are noise for the LLM, so they are dropped.
+            if not _SOURCE_LOC.search(line):
+                continue
+            line = _FRAME_SUFFIX.sub("", line)
+        kept.append(line)
+    return "\n".join(kept)
 
 
 def _truncate(text: str, max_chars: int) -> str:

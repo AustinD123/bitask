@@ -40,9 +40,12 @@ Rules, applied in this order:
 1. Strip ANSI colour codes.
 2. Remove the workdir path, with its trailing separator.
 3. For a sanitizer report, keep from its first report line through its `SUMMARY:` line. Text before and after is dropped.
-4. Drop the shadow-byte block ("Shadow bytes around the buggy address" through the legend).
+4. Drop the shadow-byte block (one regex: from "Shadow bytes around the buggy address" to the `SUMMARY:` line).
 5. Mask per-run values, listed below.
-6. Truncate to `max_chars`, appending `[... N chars truncated]`.
+6. Drop stack frames that have no source location. A frame is a line starting `#N `. A frame without a `file.c:`, `file.cpp:`, `file.h:` or `file.hpp:` location is libc, the allocator or startup code, and is dropped. Frames that remain have their `(test_bin+0x...)` and `(BuildId: ...)` suffixes stripped. Frame numbers are kept as printed, so gaps show where frames were dropped.
+7. Truncate to `max_chars`, appending `[... N chars truncated]`.
+
+The raw output is never changed. It is kept in `raw_stdout` and `raw_stderr`.
 
 Per-run values that are masked:
 
