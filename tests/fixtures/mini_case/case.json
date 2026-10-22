@@ -1,0 +1,14 @@
+{
+  "id": "mini_case",
+  "title": "Tiny synthetic case for harness tests",
+  "lang": "c",
+  "std": "c11",
+  "editable": "buggy.c",
+  "reference": "reference_fix.c",
+  "test": "test.c",
+  "hidden_test": "hidden_test.c",
+  "sanitizers": ["address", "undefined"],
+  "timeout_s": 2,
+  "expected_buggy_stage": "test_fail",
+  "description": "add() returns a - b instead of a + b."
+}

@@ -601,3 +601,47 @@ Do not match filenames in compiler output.
 - pytest is installed via apt only (`python3-pytest`). `requirements-dev.txt` is kept for non-Docker use, with a comment saying so.
 - The base image is pinned by digest. The exact clang-18 package version is recorded in the README.
 - The documented `docker run` command drops `-it`.
+
+## Decisions (Phase 1)
+
+**Accepted as written**
+
+- `libclang-rt-18-dev` and `bc` in the Dockerfile, the branch rename to `main`, and the read-only mount.
+- `--cap-add SYS_PTRACE` stays. It is harmless here and needed on other hosts.
+- Case 04 keeps `timeout_s: 20`.
+
+**Sanitizer internal failures are `harness_error` (Phase 3)**
+
+- Any line matching `Sanitizer: CHECK failed` (any sanitizer) or `unexpected memory mapping` is `harness_error`. This is checked before the sanitizer-marker rule.
+- Preflight: if the case uses `thread` and `/proc/sys/vm/mmap_rnd_bits` is above 28, `verify()` returns `harness_error` immediately, without compiling. The message is "TSan needs vm.mmap_rnd_bits <= 28; run scripts/fix-aslr.sh (or .ps1)". If the file cannot be read, the preflight is skipped.
+
+**ASan and UBSan object-size (Phase 3)**
+
+- When `address` and `undefined` are both enabled, the compile command adds `-fno-sanitize=object-size`. UBSan's "insufficient space" report is replaced by ASan's `heap-buffer-overflow` with allocation stack, and ASan already covers that check. The flag gets a comment and a row in the flags table in `docs/harness.md`.
+- The "writes past a malloc'd buffer" test row and case 01 must both report `heap-buffer-overflow`. This is verified, not assumed.
+
+**Dead-store elision (Phases 3 and 4)**
+
+- Every fixture and test meant to trigger a sanitizer must make the bad effect observable: the pointer or value is returned to the test, stored in a global, or read back by the test.
+- Candidate code must not use `volatile` unless the case is explicitly about it, because an LLM will later edit that code.
+- Candidate and test are separate translation units and there is no LTO, so values crossing the function boundary cannot be elided. This is relied on.
+- The starter-case suite checks that each buggy version fails at its expected stage. That check stays strict.
+
+**Leak reporting (Phase 3)**
+
+- A leak is detected by the `ERROR: LeakSanitizer` line. `sanitizer_summary` is built as `LeakSanitizer: <text after "SUMMARY: AddressSanitizer: ">`, for example `LeakSanitizer: 16 byte(s) leaked in 1 allocation(s)`.
+
+**Per-run numbers (Phase 3)**
+
+- Mask `pid=\d+`, `tid=\d+` and `==\d+==`. The determinism test is the arbiter. Any other varying number it finds is masked and listed in `docs/harness.md`.
+
+## Decisions (Phase 2)
+
+- The loader requires the declarations header to exist: `lib.h` for C cases, `lib.hpp` for C++ cases. The spec lists it in the directory layout but not in `case.json`, so the loader derives it from `lang`.
+- All four named files (`editable`, `reference`, `test`, `hidden_test`) must end in the extension for `lang` (`.c` or `.cpp`). Filenames must be bare names, with no directory parts, so a case cannot point outside its own directory.
+- `std` must match `lang`: C standards `c` or `gnu` followed by digits, optionally with `x`; C++ standards `c++` or `gnu++` followed by digits.
+- `expected_buggy_stage` must be one of `compile_error`, `sanitizer`, `test_fail`, `crash`, `timeout`.
+- `NOTES.md` is not checked by the loader. It is a documentation file, and the starter-case suite will check it later.
+- `Case` stores its directory. The repo root is resolved from the package location, as `REPO_ROOT` in `verifyloop/case.py`.
+- `bench/common/check.h` is created in Phase 2, because the `mini_case` fixture includes it. Phase 3 verifies that it compiles as C11 and C++17 under `-Wall -Werror`.
+- `pytest.ini` sets `pythonpath = .` and `testpaths = tests`, so `pytest -v` works from `/work` without `python3 -m`.
