@@ -645,3 +645,40 @@ Do not match filenames in compiler output.
 - `Case` stores its directory. The repo root is resolved from the package location, as `REPO_ROOT` in `verifyloop/case.py`.
 - `bench/common/check.h` is created in Phase 2, because the `mini_case` fixture includes it. Phase 3 verifies that it compiles as C11 and C++17 under `-Wall -Werror`.
 - `pytest.ini` sets `pythonpath = .` and `testpaths = tests`, so `pytest -v` works from `/work` without `python3 -m`.
+
+## Decisions (Phase 3)
+
+**Phase 2 follow-ups, done first**
+
+- `DEFAULTS` is replaced by immutable constants (`DEFAULT_EXTRA_FLAGS` is a tuple). `Case` stays a frozen dataclass.
+- `REPO_ROOT` is replaced by `COMMON_INCLUDE_DIR` (`bench/common`, resolved from the package location).
+- The `NOTES.md` existence check is deferred to Phase 6. It is not part of `test_starter_cases.py` in Phase 4.
+
+**Compile**
+
+- The three steps are: the test file with `-c` (failure is `harness_error`, "test file failed to compile, this is a case bug"), the candidate with `-c` (failure is `compile_error`), and the link (failure is `compile_error`). All three use the same flag list.
+- `VerifyResult.compile_cmd` holds the command that failed, or the link command when all three steps pass.
+- A compile timeout is `compile_error` when it happens on the candidate and `harness_error` when it happens on the test file. Both use `COMPILE_TIMEOUT_S = 60`.
+
+**Output capture**
+
+- Each stream keeps at most 1 MB: the first 512 KB and the last 512 KB, with a note in between. The completion marker is printed last, so the tail keeps it visible. This refines the spec's single cap, which would drop the marker from long output.
+
+**Classifier**
+
+- `classify_run(stdout, stderr, exit_code, timed_out, nonce)` is pure. The nonce is a sixth argument, because the marker check needs it.
+
+**Cleaning**
+
+- Masked, in addition to the Phase 0 list: `BuildId: [0-9a-f]+`. The build ID changes between runs because the binary embeds the workdir path in its debug info. It is listed in `docs/harness.md`.
+- The `sanitizer_summary` for UBSan is the first `runtime error:` line. The UBSan `SUMMARY:` line is "undefined-behavior" and says little.
+- The `sanitizer_summary` for LSan is `LeakSanitizer: <text>`, with the trailing period removed.
+
+**Fixtures for sanitizer tests**
+
+- The buggy effect must cross the function boundary. Write-past-malloc keeps its buffer in an external-linkage global. The leak passes its pointer to `sink_ptr`, defined in the test file. No candidate uses `volatile`.
+- Candidates that call `fork()` define `_POSIX_C_SOURCE`, because strict `-std=c11` hides it.
+
+**Budget**
+
+- `verifyloop/` is 441 code lines (`toolchain.py` 322, `case.py` 119). That is over the ~300 target. The overage and the proposed cuts are reported in Phase 3 and not made silently.

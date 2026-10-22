@@ -14,9 +14,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-# Repo root, resolved from this file's location so bench/common can be found
-# no matter where the harness is invoked from.
-REPO_ROOT = Path(__file__).resolve().parent.parent
+# Shared test helpers (bench/common/check.h), resolved from the package location
+# so the harness finds them wherever it is invoked from.
+COMMON_INCLUDE_DIR = Path(__file__).resolve().parent.parent / "bench" / "common"
 
 SANITIZERS = ("address", "undefined", "thread")
 FAILURE_STAGES = ("compile_error", "sanitizer", "test_fail", "crash", "timeout")
@@ -24,8 +24,11 @@ REQUIRED_STRINGS = (
     "id", "title", "lang", "std", "editable", "reference",
     "test", "hidden_test", "expected_buggy_stage", "description",
 )
-DEFAULTS: dict[str, Any] = {"extra_flags": [], "runs": 1, "timeout_s": 10}
-ALL_FIELDS = set(REQUIRED_STRINGS) | {"sanitizers"} | set(DEFAULTS)
+# Immutable on purpose: a shared mutable default would leak between cases.
+DEFAULT_EXTRA_FLAGS: tuple[str, ...] = ()
+DEFAULT_RUNS = 1
+DEFAULT_TIMEOUT_S = 10
+ALL_FIELDS = frozenset(REQUIRED_STRINGS) | {"sanitizers", "extra_flags", "runs", "timeout_s"}
 EXTENSION = {"c": ".c", "cpp": ".cpp"}
 STD_PATTERN = {"c": r"(c|gnu)\d+x?", "cpp": r"(c\+\+|gnu\+\+)\d+"}
 
@@ -103,14 +106,14 @@ def load_case(directory: str | Path) -> Case:
         raise CaseError(f"{meta_path}: top level must be a JSON object")
 
     _check_fields(raw, meta_path)
-    meta = {**DEFAULTS, **raw}
     case = Case(
-        id=meta["id"], title=meta["title"], lang=meta["lang"], std=meta["std"],
-        editable=meta["editable"], reference=meta["reference"], test=meta["test"],
-        hidden_test=meta["hidden_test"], sanitizers=tuple(meta["sanitizers"]),
-        extra_flags=tuple(meta["extra_flags"]), runs=meta["runs"],
-        timeout_s=meta["timeout_s"], expected_buggy_stage=meta["expected_buggy_stage"],
-        description=meta["description"], directory=path,
+        id=raw["id"], title=raw["title"], lang=raw["lang"], std=raw["std"],
+        editable=raw["editable"], reference=raw["reference"], test=raw["test"],
+        hidden_test=raw["hidden_test"], sanitizers=tuple(raw["sanitizers"]),
+        extra_flags=tuple(raw.get("extra_flags", DEFAULT_EXTRA_FLAGS)),
+        runs=raw.get("runs", DEFAULT_RUNS), timeout_s=raw.get("timeout_s", DEFAULT_TIMEOUT_S),
+        expected_buggy_stage=raw["expected_buggy_stage"], description=raw["description"],
+        directory=path,
     )
     _validate(case, meta_path)
     return case
