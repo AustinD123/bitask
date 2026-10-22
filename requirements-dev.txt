@@ -1,0 +1,4 @@
+# For running the tests OUTSIDE Docker only (for example on a Linux dev box
+# with clang-18 installed). Inside the container, pytest comes from apt
+# (python3-pytest) and this file is not used.
+pytest>=7.4
