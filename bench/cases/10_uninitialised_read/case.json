@@ -1,0 +1,14 @@
+{
+  "id": "10_uninitialised_read",
+  "kind": "single_file",
+  "title": "Uninitialised accumulator in sum_upto",
+  "lang": "c",
+  "std": "c11",
+  "editable": "buggy.c",
+  "reference": "reference_fix.c",
+  "test": "test.c",
+  "hidden_test": "hidden_test.c",
+  "sanitizers": ["address", "undefined"],
+  "expected_buggy_stage": "compile_error",
+  "description": "sum_upto never initialises its accumulator. ASan cannot see the read, but clang's -Wuninitialized rejects it under -Werror."
+}
