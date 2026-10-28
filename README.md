@@ -91,11 +91,14 @@ Every attempt is logged to `out/runs/` with its prompt, reply, code, verdict, to
 
 ## Groq setup
 
-The default provider is Groq's free tier through its OpenAI-compatible API. Set the keys in the environment:
+The default provider is Groq's free tier through its OpenAI-compatible API. Put the keys in `.env`, which is git-ignored:
 
 ```bash
-export LLM_API_KEYS="gsk_first,gsk_second,gsk_third"   # comma-separated, tried in order
+cp .env.example .env
+# then edit .env and set LLM_API_KEYS=gsk_first,gsk_second,gsk_third
 ```
+
+The fix and bench commands read it with `--env-file .env`. You can also export the variables in your shell instead; the commands accept either.
 
 | variable | default | meaning |
 |---|---|---|
@@ -116,14 +119,14 @@ Both run LLM-generated code, so they run in a container **with network access**,
 
 ```bash
 mkdir -p out
-docker run --rm -e LLM_API_KEYS -v "$PWD":/work:ro -v "$PWD/out":/work/out verify-harness \
+docker run --rm --env-file .env -v "$PWD":/work:ro -v "$PWD/out":/work/out verify-harness \
     python3 -m verifyloop.cli fix --case bench/cases/02_signed_overflow --model openai/gpt-oss-20b
 
-docker run --rm -e LLM_API_KEYS -v "$PWD":/work:ro -v "$PWD/out":/work/out verify-harness \
+docker run --rm --env-file .env -v "$PWD":/work:ro -v "$PWD/out":/work/out verify-harness \
     python3 -m verifyloop.cli bench --models openai/gpt-oss-20b,openai/gpt-oss-120b --trials 2
 ```
 
-`-e LLM_API_KEYS` passes the host variable of that name; `-e GROQ_API_KEY` works the same way. `--network` is not given, so the default bridge network is used.
+`--env-file .env` passes every variable in `.env` into the container. Without the file, `-e LLM_API_KEYS` passes one host variable. `--network` is not given, so the default bridge network is used.
 
 `fix` prints one line per attempt, then a coloured diff, the checks that passed, and the hidden-test result. Exit code 0 means it passed the visible test. `bench` runs every case × model × trial, and `--cases '0[1-5]*'` selects a subset. It writes `out/results/results.json` and `out/results/results.md`. When the daily limit runs out, it saves progress, prints `daily limit reached for <model>; re-run after reset to resume`, and exits with code 0.
 
