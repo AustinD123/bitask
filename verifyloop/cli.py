@@ -19,10 +19,13 @@ import os
 import sys
 from pathlib import Path
 
+from verifyloop.bench import RESULTS_DIR, Row, load_cases, run_bench
 from verifyloop.case import Case, CaseError, load_case
 from verifyloop.llm import LLMError
 from verifyloop.loop import Attempt, fix
 from verifyloop.toolchain import VerifyResult, verify_file
+
+DEFAULT_MODELS = ("openai/gpt-oss-20b", "openai/gpt-oss-120b")
 
 CHECKS = (("compiled", "compiled"), ("sanitizers_clean", "sanitizers clean"),
           ("ran_to_completion", "ran to completion"), ("tests_passed", "tests passed"))
@@ -46,6 +49,10 @@ def build_parser() -> argparse.ArgumentParser:
     fix_cmd.add_argument("--case", required=True, type=Path, help="case directory")
     fix_cmd.add_argument("--model", default=os.environ.get("LLM_MODEL", "openai/gpt-oss-20b"))
     fix_cmd.add_argument("--max-attempts", type=int, default=5)
+    bench_cmd = commands.add_parser("bench", help="compare one-shot with the fix loop over the starter cases")
+    bench_cmd.add_argument("--models", default=",".join(DEFAULT_MODELS), help="comma-separated models")
+    bench_cmd.add_argument("--trials", type=int, default=2)
+    bench_cmd.add_argument("--cases", default="*", help="glob over the names in bench/cases")
     return parser
 
 
@@ -96,6 +103,27 @@ def fix_command(args: argparse.Namespace, colour: bool) -> int:
     return 0 if run.passed else 1
 
 
+def bench_command(args: argparse.Namespace) -> int:
+    """Run the benchmark and print one line per run. A daily limit stops it cleanly, with exit code 0."""
+    cases = load_cases(args.cases)
+    if not cases:
+        print(f"error: no cases match {args.cases!r}", file=sys.stderr)
+        return 2
+    models = [model.strip() for model in args.models.split(",") if model.strip()]
+    results = run_bench(cases, models, args.trials, progress=_print_row)
+    if results["stopped"]:
+        print(f"daily limit reached for {results['stopped']['model']}; re-run after reset to resume")
+    print(f"wrote {RESULTS_DIR / 'results.md'} and {RESULTS_DIR / 'results.json'}")
+    return 0
+
+
+def _print_row(row: Row) -> None:
+    """Print one benchmark run on one line."""
+    yes = {True: "pass", False: "fail"}
+    print(f"{row.case} {row.model} trial {row.trial}: one-shot {yes[row.one_visible]}, "
+          f"loop {yes[row.loop_visible]} in {row.attempts} attempt(s), hidden {yes[row.loop_hidden]}")
+
+
 def _print_attempt(attempt: Attempt) -> None:
     """Print one attempt on one line, noting cache hits."""
     cached = " (cache hit)" if attempt.usage["cache_hit"] else ""
@@ -125,6 +153,8 @@ def main(argv: list[str] | None = None) -> int:
     colour = sys.stdout.isatty() and "NO_COLOR" not in os.environ
     if args.command == "fix":
         return fix_command(args, colour)
+    if args.command == "bench":
+        return bench_command(args)
     try:
         case = load_case(args.case)
     except CaseError as error:
