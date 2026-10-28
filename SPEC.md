@@ -783,3 +783,120 @@ Do not match filenames in compiler output.
 
 - `case.py` and `toolchain.py` together: 451 code lines, one over the ~450 target.
 - `cli.py`: 62 code lines, against the ~60 budget.
+
+## Layer 2 spec
+
+Layer 2: the LLM fix loop and benchmark. This is a PROTOTYPE. Keep it
+simple and readable; don't add features beyond this list. First, append
+this whole prompt to SPEC.md as "## Layer 2 spec". Work through the steps
+in order, keep pytest green after each, commit after each step, and report
+once at the end (or earlier if you're blocked).
+
+Provider: Groq free tier (OpenAI-compatible)
+- Base URL https://api.groq.com/openai/v1. Models: openai/gpt-oss-20b
+  (small) and openai/gpt-oss-120b (large). Check the Limits page in the
+  Groq console for current limits (roughly 8K tokens/min, 200K tokens/day
+  per model; daily reset at UTC midnight). Limits are per model, so the
+  two models can run in parallel.
+- Config via env vars: LLM_PROVIDER (openai | anthropic, default openai),
+  LLM_BASE_URL (default the Groq URL), LLM_API_KEY (fall back to
+  GROQ_API_KEY), LLM_MODEL. For gpt-oss models, send
+  reasoning_effort="low" to save tokens.
+
+Step 1: verifyloop/llm.py (~80 code lines)
+- One function: complete(messages, model) -> (text, usage). Use the
+  `openai` package for openai-compatible APIs, and the `anthropic` package
+  when LLM_PROVIDER=anthropic (implement it, but only test it with mocks).
+  Add both to requirements.txt.
+- Disk cache: key = sha256 of (provider, model, messages, settings); store
+  the response and usage in out/cache/. A cache hit makes no API call. This
+  makes runs resumable and stops us wasting free tokens.
+- On HTTP 429: wait the time from the retry-after header (or the
+  x-ratelimit-reset headers), retry up to 3 times. If the error says the
+  daily limit is exhausted, raise DailyLimitReached with a clear message
+  instead of waiting.
+- MockProvider for tests: returns scripted responses in order.
+
+Step 2: verifyloop/loop.py (~100 code lines)
+- fix(case, model, max_attempts=5) -> FixRun.
+- Attempt 1 prompt: a short system prompt ("You fix C/C++ bugs. Return the
+  complete corrected file in a single fenced code block. Do not change
+  function signatures."), then the buggy file, lib.h/lib.hpp, and the
+  visible test. Never send the hidden test.
+- Extract the last fenced code block. If there's no block, that attempt
+  fails with "no code block in response".
+- Guardrails: reject a candidate containing no_sanitize, `#pragma` followed
+  by diagnostic/clang/GCC, __asan, or VERIFY_NONCE. That attempt fails as
+  stage "rejected" with the reason. It is not compiled.
+- Otherwise run verify() on the visible test.
+- Retry prompt (compact, so tokens don't grow): the original task, your
+  previous attempt, then "It failed at stage <stage>:" plus the cleaned
+  output. Don't send the full history.
+- Stop on the first pass, or after max_attempts.
+- After the loop, run the final candidate (passing, or the last one) on the
+  HIDDEN test, and record that separately.
+- Log every attempt to out/runs/<timestamp>_<case>_<model>.json: prompt,
+  response, extracted code, VerifyResult.to_dict(), tokens, latency, cache
+  hit.
+
+Step 3: CLI `fix` subcommand (keep cli.py small)
+- python -m verifyloop.cli fix --case <dir> [--model M] [--max-attempts N]
+- Prints each attempt's stage on one line. On success, prints a coloured
+  unified diff (difflib, buggy vs final) and a summary: attempts used, which
+  checks passed, and the hidden test result.
+
+Step 4: add 6 more starter cases (one per bug type the assignment lists
+that we don't have yet): use-after-free, double free, off-by-one (C),
+memory leak, null dereference, uninitialised read. Keep each tiny, in the
+same format as the existing cases, with reference fix and hidden test.
+- Uninitialised read: ASan can't see it. Use clang's -Wuninitialized or
+  -Wsometimes-uninitialized, so the buggy version fails as compile_error.
+  The visible test must still exercise the behaviour.
+- Naive fixes and the naive-fix manifest entry are optional for these six;
+  make the starter suite skip naive checks when there's no entry.
+- All starter-suite checks must pass. That gives 10 cases covering every
+  bug type in the assignment.
+
+Step 5: verifyloop/bench.py and the `bench` subcommand (~100 code lines)
+- python -m verifyloop.cli bench [--models m1,m2] [--trials 2]
+  [--cases glob]
+- For each case × model × trial, run fix(). One-shot result = attempt 1 of
+  the same run (no separate call). Loop result = final result. For both,
+  record visible pass and hidden pass.
+- Cache keys include the trial number, so trials are real repeats, not
+  cache hits. A re-run of the same command reuses the cache and is free.
+- If DailyLimitReached is raised, save results so far, print "daily limit
+  reached for <model>; re-run after reset to resume", and exit cleanly.
+- Output: out/results/results.json, and out/results/results.md with a
+  table: case | model | one-shot visible | one-shot hidden | loop visible |
+  loop hidden | avg attempts. Then overall pass rates per model, for
+  one-shot vs loop, on both visible and hidden tests.
+
+Step 6: tests and docs
+- pytest uses MockProvider only, with no network. Test: code-block
+  extraction, guardrail rejection, compact retry prompt contents (contains
+  the last error, not older attempts), hidden test never in any prompt,
+  stops at max_attempts, stops on first pass, the cache prevents a second
+  call, DailyLimitReached handling, and bench table generation from mocked
+  runs.
+- Docker: tests stay as before (read-only, --network none). Document a
+  second command for fix/bench: network enabled, GROQ_API_KEY passed with
+  -e, and a writable mount for out/ (e.g. -v "$PWD/out":/work/out). Add out/
+  to .gitignore, except commit out/results/ at the end.
+- README: add "How the fix loop works" (short), the Groq setup, the
+  fix/bench commands, and the results table once the real run is done.
+  Under Limitations, add that the fix and bench commands run LLM-generated
+  code in a container with network access.
+
+Real run (after all steps are green)
+- Live smoke test first: fix on 02_signed_overflow with gpt-oss-20b. Show
+  me its output.
+- Then bench with both models, 2 trials, all 10 cases. If you hit the daily
+  limit, stop, report progress, and I'll tell you when to resume.
+
+Line budgets: llm ~80, loop ~100, bench ~100. Report actuals; don't trim
+to hit them.
+
+Final report: test count, the live smoke output, the results table (or
+progress so far), line counts, and anything surprising, especially cases
+where one-shot passed the visible test but failed the hidden one.
