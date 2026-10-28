@@ -12,8 +12,16 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       clang-18 llvm-18 libclang-rt-18-dev \
-      python3 python3-pip python3-pytest make bc ca-certificates \
+      python3 python3-pip python3-venv python3-pytest make bc ca-certificates \
  && rm -rf /var/lib/apt/lists/*
+
+# The fix loop (Layer 2) needs the openai and anthropic SDKs. Ubuntu forbids
+# system-wide pip installs, so they go in a venv that still sees the apt packages.
+COPY requirements.txt /tmp/requirements.txt
+RUN python3 -m venv --system-site-packages /opt/venv \
+ && /opt/venv/bin/pip install --no-cache-dir -r /tmp/requirements.txt \
+ && rm /tmp/requirements.txt
+ENV PATH="/opt/venv/bin:$PATH"
 
 # The harness reads CC/CXX from the environment and falls back to clang/clang++.
 ENV CC=clang-18 \

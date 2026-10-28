@@ -1,1 +1,5 @@
-# Runtime dependencies: none. The harness uses the Python standard library only.
+# Runtime dependencies for the fix loop (Layer 2). The verifier itself uses the
+# standard library only. The tests run without these packages, since they use
+# MockProvider and import the SDKs lazily.
+openai==3.40.0
+anthropic==2.3.0
