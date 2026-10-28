@@ -114,16 +114,20 @@ class AnthropicBackend:
         return Reply(text, resp.usage.input_tokens, resp.usage.output_tokens)
 
 
-def complete(messages: list[dict], model: str) -> tuple[str, dict]:
+def complete(messages: list[dict], model: str, trial: int = 0) -> tuple[str, dict]:
     """Return ``(text, usage)`` for one chat request.
 
+    ``trial`` is not sent to the model. It is part of the cache key, so repeated
+    trials of the same request are real repeats, not cache hits.
+
     ``usage`` has ``prompt_tokens``, ``completion_tokens``, ``latency_s`` (0.0 on
-    a cache hit) and ``cache_hit``. A cache hit makes no API call. Raises
-    DailyLimitReached when every key is out of quota for ``model``.
+    a cache hit), ``cache_hit`` and ``key`` (the hash of the key used). A cache
+    hit makes no API call. Raises DailyLimitReached when every key is out of
+    quota for ``model``.
     """
     provider = os.environ.get("LLM_PROVIDER", "openai")
     settings = _settings(model)
-    path = _cache_path(provider, model, messages, settings)
+    path = _cache_path(provider, model, messages, settings, trial)
     start = time.monotonic()
     if path.is_file():
         cached = json.loads(path.read_text(encoding="utf-8"))
@@ -144,9 +148,9 @@ def _settings(model: str) -> dict:
     return settings
 
 
-def _cache_path(provider: str, model: str, messages: list[dict], settings: dict) -> Path:
+def _cache_path(provider: str, model: str, messages: list[dict], settings: dict, trial: int) -> Path:
     """The cache file for one request: sha256 of everything that changes the reply."""
-    blob = json.dumps([provider, model, messages, settings], sort_keys=True)
+    blob = json.dumps([provider, model, messages, settings, trial], sort_keys=True)
     return CACHE_DIR / (hashlib.sha256(blob.encode("utf-8")).hexdigest() + ".json")
 
 
