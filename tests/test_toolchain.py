@@ -266,7 +266,9 @@ def test_infinite_loop_is_timeout() -> None:
 
 
 def test_abort_is_crash_naming_the_signal() -> None:
-    result = verify(ABORT, MINI)
+    # abort() writes a core dump. On WSL the host's crash handler can take about 30 s
+    # to finish that, so the timeout is raised here. The test is about the signal, not speed.
+    result = verify(ABORT, dataclasses.replace(MINI, timeout_s=60))
     assert result.stage == "crash"
     assert "SIGABRT" in result.output
     assert result.exit_code == -6

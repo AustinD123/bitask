@@ -16,8 +16,10 @@ Everything runs in Docker. Results are only meaningful inside the container.
 ```bash
 docker build -t verify-harness .
 docker run --rm --cap-add SYS_PTRACE --network none -v "$PWD":/work:ro verify-harness \
-    pytest -v -p no:cacheprovider
+    python3 -m pytest -v -p no:cacheprovider
 ```
+
+`python3 -m pytest` rather than `pytest`: the image has a venv with the LLM SDKs, and the bare `pytest` binary runs outside it.
 
 Run the sanitizer smoke check, which compiles five small programs with the harness's flags:
 
@@ -72,6 +74,63 @@ PASS  01_heap_overflow (visible test, 0.55s)
 
 The sanitizer summary sits under the verdict, because it is the line a reader needs first. Colour is used only on a terminal, and `NO_COLOR` turns it off.
 
+## How the fix loop works
+
+Layer 2 asks a language model to fix the buggy file, then checks the fix with the same harness.
+
+1. **Attempt 1** sends a short system prompt, the buggy file, the header and the visible test. The hidden test is never sent.
+2. The **last fenced code block** in the reply is the candidate. No block is a failed attempt.
+3. **Guardrails** reject a candidate that mentions `no_sanitize`, `__asan`, `VERIFY_NONCE`, or a `#pragma` diagnostic, clang or GCC directive. A rejected candidate is not compiled.
+4. Otherwise `verify()` runs the **visible** test. A pass stops the loop.
+5. A **retry** sends the original task, the previous attempt, and only the latest cleaned failure. Older attempts are not sent.
+6. After the loop (at most `--max-attempts`), the first candidate and the final candidate each run on the **hidden** test, recorded separately.
+
+Every attempt is logged to `out/runs/` with its prompt, reply, code, verdict, tokens, latency and whether it was a cache hit.
+
+**One-shot** is attempt 1 of the same run, so the benchmark costs no extra call. **Trials** are part of the cache key, so trial 2 is a real repeat, not a cache hit. Replies are cached in `out/cache/`, so a re-run of the same command makes no API call.
+
+## Groq setup
+
+The default provider is Groq's free tier through its OpenAI-compatible API. Set the keys in the environment:
+
+```bash
+export LLM_API_KEYS="gsk_first,gsk_second,gsk_third"   # comma-separated, tried in order
+```
+
+| variable | default | meaning |
+|---|---|---|
+| `LLM_PROVIDER` | `openai` | `openai` (any OpenAI-compatible API) or `anthropic` |
+| `LLM_BASE_URL` | `https://api.groq.com/openai/v1` | used only by `openai` |
+| `LLM_API_KEYS` | none | comma-separated keys, tried in order |
+| `LLM_API_KEY` | none | one key, used if `LLM_API_KEYS` is unset |
+| `GROQ_API_KEY` | none | one key, used if the two above are unset |
+| `LLM_MODEL` | `openai/gpt-oss-20b` | the default `--model` for `fix` |
+
+**Key rotation.** When a key's daily quota for a model is used up, that key is skipped for that model until UTC midnight and the next key is used. A key that is exhausted for `gpt-oss-120b` can still serve `gpt-oss-20b`. The exhausted keys are stored by hash in `out/cache/exhausted.json`, so a restarted run does not spend a call to find out again. When every key is exhausted for a model, the run stops with `DailyLimitReached`.
+
+**Limits.** Roughly 8K tokens per minute and 200K tokens per day per model, resetting at UTC midnight (check the Limits page in the Groq console). Per-minute limits are waited out, using the `retry-after` header, up to three retries.
+
+## Fix and bench commands
+
+Both run LLM-generated code, so they run in a container **with network access**, unlike the tests. The container needs a writable `out/`:
+
+```bash
+mkdir -p out
+docker run --rm -e LLM_API_KEYS -v "$PWD":/work:ro -v "$PWD/out":/work/out verify-harness \
+    python3 -m verifyloop.cli fix --case bench/cases/02_signed_overflow --model openai/gpt-oss-20b
+
+docker run --rm -e LLM_API_KEYS -v "$PWD":/work:ro -v "$PWD/out":/work/out verify-harness \
+    python3 -m verifyloop.cli bench --models openai/gpt-oss-20b,openai/gpt-oss-120b --trials 2
+```
+
+`-e LLM_API_KEYS` passes the host variable of that name; `-e GROQ_API_KEY` works the same way. `--network` is not given, so the default bridge network is used.
+
+`fix` prints one line per attempt, then a coloured diff, the checks that passed, and the hidden-test result. Exit code 0 means it passed the visible test. `bench` runs every case × model × trial, and `--cases '0[1-5]*'` selects a subset. It writes `out/results/results.json` and `out/results/results.md`. When the daily limit runs out, it saves progress, prints `daily limit reached for <model>; re-run after reset to resume`, and exits with code 0.
+
+### Results
+
+The results table comes from the real run and is added once that run is complete.
+
 ## Project layout
 
 ```
@@ -85,7 +144,10 @@ bitask/
   verifyloop/
     case.py                    Case, load_case(), validation
     toolchain.py               verify(), classify_run(), clean_output(), VerifyResult
-    cli.py                     python -m verifyloop.cli verify
+    llm.py                     complete(): cache, 429 retries, key rotation, MockProvider
+    loop.py                    fix(): attempts, guardrails, compact retries, hidden test, logs
+    bench.py                   run_bench(): one-shot vs loop table and pass rates
+    cli.py                     verify, fix and bench subcommands
   bench/
     common/check.h             CHECK macros and the completion marker
     cases/
@@ -130,7 +192,9 @@ The full list, with evidence, is in [docs/findings.md](docs/findings.md). These 
 
 ## Line budget
 
-Actual counts, in `verifyloop/` (code lines, excluding docstrings, comments and blank lines): `case.py` 119, `toolchain.py` 332, `cli.py` 62. The `case.py` and `toolchain.py` total is 451 against a budget of about 450, and `cli.py` is 62 against about 60.
+Actual counts, in `verifyloop/` (code lines, excluding docstrings, comments and blank lines): `case.py` 122, `toolchain.py` 338. Together that is 460 against a budget of about 450, and the Layer 1 spec's `cli.py` budget of about 60 is exceeded at 127 (62 before the `fix` and `bench` subcommands).
+
+Layer 2 modules, against the budgets in its spec: `llm.py` 148 against about 80 (it also holds the key rotation, which the spec did not list), `loop.py` 117 against about 100, `bench.py` 97 against about 100. The budgets were not trimmed to hit.
 
 The original assignment's guideline is about 500 lines for the whole core. The spec's own harness target was about 250. The lines went into verification, because it is the product: the spec's features (three-step compile, a TSan preflight, bounded output capture, a pure classifier, deterministic cleaning, and the sanitizer summaries) cannot be dropped without losing what the harness is for.
 
@@ -143,6 +207,8 @@ The original assignment's guideline is about 500 lines for the whole core. The s
 - **`setsid` can escape `killpg`.** A candidate that starts a new session can leave its children running after a timeout. The real fix is one container per run, which is out of scope.
 - **The TSan ASLR fix resets when Docker Desktop restarts.** Run `scripts/fix-aslr.sh` or `scripts/fix-aslr.ps1` again after each restart. The preflight reports `harness_error` if the value is still too high.
 - **The sanitizer options are fixed.** Cases cannot change them, and `halt_on_error` is mostly redundant under `-fno-sanitize-recover=all`.
+- **The fix and bench commands run LLM-generated code in a container with network access.** The candidate is compiled and run with the network on, so a bad reply could reach the network. The guardrails reject some patterns, but they are not a sandbox. Use these commands on a machine where that is acceptable. The tests stay offline.
+- **The benchmark covers only the ten starter cases.** It is not a real-world corpus, and two trials per model is a small sample. Treat the pass rates as indicative.
 
 ## Next steps
 
