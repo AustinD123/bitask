@@ -8,6 +8,7 @@
   "test": "test.c",
   "hidden_test": "hidden_test.c",
   "sanitizers": ["address", "undefined"],
+  "extra_flags": ["-fsanitize=unsigned-integer-overflow"],
   "expected_buggy_stage": "sanitizer",
   "description": "join_words allocates no room for the terminating NUL, and underflows when n is 0."
 }

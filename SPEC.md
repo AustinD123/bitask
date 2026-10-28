@@ -681,7 +681,8 @@ Do not match filenames in compiler output.
 
 **Budget**
 
-- Original guideline: the Constraints section says the harness should be about 250 lines, excluding tests and cases. The Phase 0 target was about 300 code lines in `verifyloop/`, excluding docstrings, comments and blank lines.
+- Original assignment guideline: about 500 lines for the whole core. This covers all core code, not only the harness.
+- SPEC.md harness target: the Constraints section says the harness code, excluding tests and cases, should be about 250 lines. The Phase 0 target was about 300 code lines in `verifyloop/`, excluding docstrings, comments and blank lines.
 - Actual at the end of Phase 3: 441 code lines (`toolchain.py` 322, `case.py` 119). The Phase 3 report proposed cuts. The Phase 3 review decided not to cut features.
 - **New budget: about 450 code lines for `case.py` and `toolchain.py` together.** Both are at about 441 now.
 - Why we exceed the original guideline: the verification layer is the product. The spec's own feature list (three-step compile, TSan preflight, bounded output capture, a classifier that stays pure, deterministic cleaning, and the sanitizer summaries) cannot fit in 250 lines without dropping features the spec requires.
@@ -730,3 +731,39 @@ Do not match filenames in compiler output.
 **Deferred**
 
 - `NOTES.md` is written in Phase 6, after the outputs are final. The starter-case suite does not check for it.
+
+## Decisions (Phase 5)
+
+**Case 01: unsigned wraparound**
+
+- `case.json` for 01 adds `"extra_flags": ["-fsanitize=unsigned-integer-overflow"]`. Unsigned wraparound is legal C, so `-fsanitize=undefined` does not report it. The flag is clang-only. The NOTES.md for 01 will mention it in Phase 6.
+- The case 01 naive fix is the spec's: `malloc(total + 1)` with `total = n - 1` kept. The NULL-guard variant is kept only as a comment in the fixture.
+- Before and after, from `verify`:
+
+| Check | Before (NULL-guard naive, no flag) | After (spec naive, with flag) |
+| --- | --- | --- |
+| buggy, visible | sanitizer: `heap-buffer-overflow` | same |
+| buggy, hidden | sanitizer: `allocation-size-too-big` (`malloc(SIZE_MAX)`) | sanitizer: UBSan `unsigned integer overflow: 0 - 1` at `buggy.c:6:22` |
+| naive, visible | ok | ok |
+| naive, hidden | sanitizer: UBSan nonnull, on `strcmp(NULL)` | sanitizer: UBSan `unsigned integer overflow: 0 - 1` at `buggy.c:15:22` |
+| reference, visible / hidden | ok / ok | ok / ok |
+
+- Without the flag, the spec's naive fix passes the hidden test. ASan accepts it because `malloc(0)` gets a one-byte block. This is recorded for the README.
+
+**Cleaning**
+
+- Absolute paths outside the workdir are shortened to `basename:line[:col]`, for example `/usr/include/string.h:157:33` becomes `string.h:157:33`. The rule is `_ABS_LOC`.
+- Truncation always keeps the key line. The key line is the SUMMARY line, or for UBSan the first `runtime error:` line. If the cut removed it, it is appended after the truncation marker. Tests cover a cut of case 03's real output and a long UBSan runtime line.
+
+**CLI**
+
+- `verifyloop/cli.py` exposes `main(argv) -> int`. `python -m verifyloop.cli` runs it.
+- Exit codes: 0 passed, 1 candidate failed, 2 harness error or invalid case, including a missing case directory or source file.
+- Human output: verdict line, then the sanitizer summary in bold directly under it, then the checks, then the cleaned output after `---`. This moves the summary above the checks, from the spec's example, because the summary is what a reader needs first.
+- Colour is used only when stdout is a TTY and `NO_COLOR` is unset. Blank lines in the output are not indented.
+- `--json` prints `VerifyResult.to_dict()` as indented JSON. Its exit code is the same as the human output's.
+
+**Budget**
+
+- `case.py` and `toolchain.py` together: 451 code lines, one over the ~450 target.
+- `cli.py`: 62 code lines, against the ~60 budget.

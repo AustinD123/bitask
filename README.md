@@ -88,3 +88,4 @@ Notes:
   malloc/free pair), and no sanitizer fires. The smoke program stores the
   pointer in a volatile global to prevent this.
 - TSan's report includes per-run `pid=` and `tid=` numbers. Output cleaning must mask them.
+- Unsigned wraparound is legal C, so `-fsanitize=undefined` does not report it. Case 01 adds `-fsanitize=unsigned-integer-overflow` (clang only). Without it, ASan accepts the naive fix `malloc(total + 1)` with `total = n - 1`: for `n == 0`, `total + 1` wraps to 0, so `malloc(0)` returns a one-byte block and the terminator write is in bounds. With the flag, the wrap is reported at the `n - 1` line.

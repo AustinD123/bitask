@@ -697,6 +697,42 @@ def test_frame_suffixes_are_stripped_and_numbering_kept() -> None:
     assert "test_bin+" not in cleaned and "BuildId" not in cleaned
 
 
+def test_absolute_paths_outside_workdir_become_basenames() -> None:
+    text = (
+        "    #0 0x1 in std::__new_allocator<int>::deallocate(int*, unsigned long) "
+        "/usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/new_allocator.h:172:2\n"
+        "    #1 0x2 in strlen /usr/include/string.h:157:33\n"
+        "    #2 0x3  (/lib/x86_64-linux-gnu/libc.so.6+0x2a1c9) (BuildId: abc)\n"
+    )
+    cleaned = clean_output(text, None)
+    assert "new_allocator.h:172:2" in cleaned and "string.h:157:33" in cleaned
+    assert "/usr/" not in cleaned
+    assert "libc.so.6" not in cleaned  # no source location, so the frame is dropped
+
+
+def test_truncation_keeps_the_summary_line_of_real_case_03_output() -> None:
+    case_dir = Path(__file__).parent.parent / "bench" / "cases" / "03_iterator_invalidation"
+    raw = verify_file(case_dir / "buggy.cpp", load_case(case_dir)).raw_stderr
+    full = clean_output(raw, None, max_chars=10**6)
+    summary = next(line for line in full.splitlines() if line.startswith("SUMMARY: "))
+    cut = clean_output(raw, None, max_chars=400)
+    assert "chars truncated]" in cut
+    assert cut.endswith("\n" + summary)
+    assert summary.startswith("SUMMARY: AddressSanitizer: heap-use-after-free")
+
+
+def test_truncation_keeps_the_first_runtime_error_for_ubsan() -> None:
+    # A runtime error line longer than the cap, so the cut removes it.
+    runtime = "buggy.c:8:19: runtime error: " + "signed integer overflow " * 20
+    ubsan = (
+        runtime + "\n"
+        + "    #0 0x1 in main buggy.c:8:19\n" * 40
+        + "SUMMARY: UndefinedBehaviorSanitizer: undefined-behavior buggy.c:8:19 \n"
+    )
+    cut = clean_output(ubsan, None, max_chars=200)
+    assert cut.endswith("\n" + runtime.strip())
+
+
 def test_truncation_appends_the_count() -> None:
     assert clean_output("a" * 100, None, max_chars=10) == "a" * 10 + "\n[... 90 chars truncated]"
 

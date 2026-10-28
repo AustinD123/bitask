@@ -66,6 +66,7 @@ _SHADOW = re.compile(r"Shadow bytes around the buggy address:.*?(?=^SUMMARY:|\Z)
 _FRAME = re.compile(r"^\s*#\d+ ")
 _SOURCE_LOC = re.compile(r"\b[\w./-]+\.(?:c|cpp|h|hpp):\d+")
 _FRAME_SUFFIX = re.compile(r" \((?:test_bin\+0x[0-9a-f]+|BuildId: BUILDID)\)")
+_ABS_LOC = re.compile(r"/(?:[^\s:()/]+/)+([^\s:()/]+:\d+)")
 
 
 @dataclass
@@ -421,6 +422,7 @@ def _clean(text: str, workdir: Path | None) -> str:
     text = _PID.sub("pid=PID", text)
     text = _BUILD_ID.sub("BuildId: BUILDID", text)
     text = _TID.sub("tid=TID", text)
+    text = _ABS_LOC.sub(r"\1", text)  # /usr/include/x/string.h:157 -> string.h:157
     kept = []
     for line in text.splitlines():
         if _FRAME.match(line):
@@ -434,23 +436,37 @@ def _clean(text: str, workdir: Path | None) -> str:
 
 
 def _truncate(text: str, max_chars: int) -> str:
-    """Cut ``text`` to ``max_chars`` and say how much was removed."""
+    """Cut ``text`` to ``max_chars`` and say how much was removed.
+
+    The key line (the SUMMARY line, or the first runtime error for UBSan) is
+    always kept. If the cut removed it, it is appended after the marker.
+    """
     if len(text) <= max_chars:
         return text
-    return text[:max_chars] + f"\n[... {len(text) - max_chars} chars truncated]"
+    kept = text[:max_chars]
+    marker = f"\n[... {len(text) - max_chars} chars truncated]"
+    key = _key_line(text)
+    if key and key not in kept:
+        return kept + marker + "\n" + key
+    return kept + marker
+
+
+def _key_line(text: str) -> str | None:
+    """Return the line a reader needs most: the SUMMARY line, or for UBSan the first runtime error."""
+    lines = text.splitlines()
+    summary = next((line for line in lines if line.startswith("SUMMARY: ")), None)
+    if summary and not summary.startswith("SUMMARY: UndefinedBehaviorSanitizer"):
+        return summary
+    return next((line.strip() for line in lines if "runtime error:" in line), summary)
 
 
 def _summary(cleaned: str) -> str | None:
     """Return the one-line sanitizer summary from already-cleaned output, or None."""
-    lines = cleaned.splitlines()
-    summary = next((line[len("SUMMARY: "):] for line in lines if line.startswith("SUMMARY: ")), None)
-    runtime = next((line.strip() for line in lines if "runtime error:" in line), None)
-    if "ERROR: LeakSanitizer" in cleaned and summary:
+    key = _key_line(cleaned)
+    if key and key.startswith("SUMMARY: AddressSanitizer: ") and "ERROR: LeakSanitizer" in cleaned:
         # LSan's SUMMARY line says "AddressSanitizer:", so name the real sanitizer.
-        return "LeakSanitizer: " + summary.removeprefix("AddressSanitizer: ").rstrip(".")
-    if summary and not summary.startswith("UndefinedBehaviorSanitizer"):
-        return summary
-    return runtime or summary
+        return "LeakSanitizer: " + key.removeprefix("SUMMARY: AddressSanitizer: ").rstrip(".")
+    return key.removeprefix("SUMMARY: ") if key else None
 
 
 def _find_line(text: str, markers: tuple[str, ...]) -> str | None:
