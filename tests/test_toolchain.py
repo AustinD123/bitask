@@ -760,3 +760,20 @@ def test_truncation_appends_the_count() -> None:
 )
 def test_sanitizer_summary_per_sanitizer(raw: str, summary: str) -> None:
     assert toolchain._summary(toolchain._clean(raw, None)) == summary
+
+
+def test_verify_dispatches_single_file_cases_to_the_single_file_path(monkeypatch) -> None:
+    calls = []
+
+    def fake(source_code, case, *, test, keep_workdir):
+        calls.append((source_code, case.kind, test, keep_workdir))
+        return "sentinel"
+
+    monkeypatch.setattr(toolchain, "_verify_single_file", fake)
+    assert verify("int x;", MINI, test="hidden", keep_workdir=True) == "sentinel"
+    assert calls == [("int x;", "single_file", "hidden", True)]
+
+
+def test_verify_rejects_an_unknown_kind_that_bypassed_the_loader() -> None:
+    with pytest.raises(ValueError, match="unsupported case kind 'project'"):
+        verify(GOOD, dataclasses.replace(MINI, kind="project"))

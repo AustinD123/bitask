@@ -15,7 +15,7 @@ from verifyloop.case import CaseError, load_case
 
 FIXTURE = Path(__file__).parent / "fixtures" / "mini_case"
 REQUIRED = [
-    "id", "title", "lang", "std", "editable", "reference",
+    "id", "kind", "title", "lang", "std", "editable", "reference",
     "test", "hidden_test", "sanitizers", "expected_buggy_stage", "description",
 ]
 
@@ -229,3 +229,16 @@ def test_top_level_must_be_an_object(case_dir: Path) -> None:
     (case_dir / "case.json").write_text("[]", encoding="utf-8")
     with pytest.raises(CaseError, match="top level must be a JSON object"):
         load_case(case_dir)
+
+
+@pytest.mark.parametrize("kind", ["project", "single-file"])
+def test_unsupported_case_kind_is_rejected(case_dir: Path, kind: str) -> None:
+    meta = read_meta(case_dir)
+    meta["kind"] = kind
+    write_meta(case_dir, meta)
+    with pytest.raises(CaseError, match=f"case kind '{kind}' is not supported yet"):
+        load_case(case_dir)
+
+
+def test_single_file_kind_loads(case_dir: Path) -> None:
+    assert load_case(case_dir).kind == "single_file"

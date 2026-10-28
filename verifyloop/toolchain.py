@@ -137,6 +137,15 @@ def verify(
     Returns:
         A VerifyResult. This function does not raise because of candidate code.
     """
+    if case.kind == "single_file":
+        return _verify_single_file(source_code, case, test=test, keep_workdir=keep_workdir)
+    raise ValueError(f"unsupported case kind {case.kind!r}")
+
+
+def _verify_single_file(
+    source_code: str, case: Case, *, test: str, keep_workdir: bool,
+) -> VerifyResult:
+    """Verify a ``single_file`` case: one editable file, one test binary. Called by verify()."""
     start = time.monotonic()
     if "thread" in case.sanitizers and (problem := _tsan_preflight()):
         return _result(case, None, "harness_error", start, keep_workdir, message=problem)

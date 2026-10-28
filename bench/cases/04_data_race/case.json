@@ -1,5 +1,6 @@
 {
   "id": "04_data_race",
+  "kind": "single_file",
   "title": "Unsynchronised counter in parallel_count",
   "lang": "c",
   "std": "c11",

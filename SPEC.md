@@ -524,6 +524,22 @@ Documentation is a deliverable, not an afterthought. A new engineer should be ab
 - An inline comment on every compile flag and sanitizer option.
 - No commented-out code, no TODOs left without an explanation.
 
+## Future: real-world track (not Layer 1)
+
+After the LLM loop works, a small set of real-world bugs will run
+alongside the synthetic cases, so results can be reported separately for
+toy and real bugs. Candidates come from ByteAsk's C-CppBench catalogue
+(https://github.com/ByteAsk/C-CppBench):
+- ARVO: reproducible OSS-Fuzz C/C++ memory bugs, sanitizer-driven like ours.
+- Defects4C: executable real C/C++ bugs with test-based repair validation.
+- BugsCpp: real C/C++ bugs packaged with build, test and coverage tooling.
+- VulnLoc / ExtractFix: small C memory-safety repair datasets.
+
+These need a "project" case kind: a build command, a test command, a list
+of editable files, and a per-project Docker image. Keep the design ready
+for it: the kind field dispatched in verify(), and classification and
+cleaning working on raw stdout/stderr and an exit code only.
+
 ## Acceptance criteria
 
 The task is done when all of these hold:

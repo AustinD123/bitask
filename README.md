@@ -150,10 +150,12 @@ The planned next kind is a `project` case, with multi-file code and build system
 
 Real-world cases will be picked from the public C/C++ LLM benchmark catalogue at [ByteAsk/C-CppBench](https://github.com/ByteAsk/C-CppBench), which lists 96 benchmarks. It is a README, not runnable cases. The candidates for the real-world track are:
 
-- ARVO
-- Defects4C
-- BugsCpp
-- VulnLoc / ExtractFix
+- **ARVO**: reproducible OSS-Fuzz C/C++ memory bugs, sanitizer-driven like ours.
+- **Defects4C**: executable real C/C++ bugs with test-based repair validation.
+- **BugsCpp**: real C/C++ bugs packaged with build, test and coverage tooling.
+- **VulnLoc / ExtractFix**: small C memory-safety repair datasets.
+
+They need a `project` case kind, which is not implemented yet. Layer 1 accepts only `single_file`. The design is in [SPEC.md](SPEC.md), under "Future: real-world track".
 
 ## Documentation
 

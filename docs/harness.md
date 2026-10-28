@@ -38,6 +38,7 @@ For C++ cases the extensions are `.cpp` and `.hpp`. `buggy.cpp` and `reference_f
 | Field | Type | Required | Meaning |
 | --- | --- | --- | --- |
 | `id` | string | yes | Must equal the directory name |
+| `kind` | string | yes | Must be `"single_file"`. Any other value is rejected with `case kind '<x>' is not supported yet`. `verify()` dispatches on it. |
 | `title` | string | yes | Short human title |
 | `lang` | `"c"` or `"cpp"` | yes | Selects `CC` or `CXX` |
 | `std` | string | yes | Passed as `-std=`, for example `c11` or `c++17` |

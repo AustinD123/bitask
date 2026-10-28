@@ -1,5 +1,6 @@
 {
   "id": "01_heap_overflow",
+  "kind": "single_file",
   "title": "Heap buffer overflow in join_words",
   "lang": "c",
   "std": "c11",

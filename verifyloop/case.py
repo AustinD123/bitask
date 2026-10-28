@@ -21,7 +21,7 @@ COMMON_INCLUDE_DIR = Path(__file__).resolve().parent.parent / "bench" / "common"
 SANITIZERS = ("address", "undefined", "thread")
 FAILURE_STAGES = ("compile_error", "sanitizer", "test_fail", "crash", "timeout")
 REQUIRED_STRINGS = (
-    "id", "title", "lang", "std", "editable", "reference",
+    "id", "kind", "title", "lang", "std", "editable", "reference",
     "test", "hidden_test", "expected_buggy_stage", "description",
 )
 # Immutable on purpose: a shared mutable default would leak between cases.
@@ -60,6 +60,7 @@ class Case:
     """
 
     id: str
+    kind: str
     title: str
     lang: str
     std: str
@@ -107,7 +108,7 @@ def load_case(directory: str | Path) -> Case:
 
     _check_fields(raw, meta_path)
     case = Case(
-        id=raw["id"], title=raw["title"], lang=raw["lang"], std=raw["std"],
+        id=raw["id"], kind=raw["kind"], title=raw["title"], lang=raw["lang"], std=raw["std"],
         editable=raw["editable"], reference=raw["reference"], test=raw["test"],
         hidden_test=raw["hidden_test"], sanitizers=tuple(raw["sanitizers"]),
         extra_flags=tuple(raw.get("extra_flags", DEFAULT_EXTRA_FLAGS)),
@@ -147,6 +148,8 @@ def _validate(case: Case, source: Path) -> None:
     """Apply the cross-field validation rules to a type-checked ``Case``."""
     if case.id != case.directory.name:
         raise CaseError(f"{source}: id '{case.id}' does not match directory name '{case.directory.name}'")
+    if case.kind != "single_file":
+        raise CaseError(f"{source}: case kind '{case.kind}' is not supported yet")
     if case.lang not in EXTENSION:
         raise CaseError(f"{source}: 'lang' must be 'c' or 'cpp', got '{case.lang}'")
     if not re.fullmatch(STD_PATTERN[case.lang], case.std):

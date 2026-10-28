@@ -1,5 +1,6 @@
 {
   "id": "mini_case",
+  "kind": "single_file",
   "title": "Tiny synthetic case for harness tests",
   "lang": "c",
   "std": "c11",

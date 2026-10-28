@@ -1,5 +1,6 @@
 {
   "id": "02_signed_overflow",
+  "kind": "single_file",
   "title": "Signed overflow in midpoint",
   "lang": "c",
   "std": "c11",
