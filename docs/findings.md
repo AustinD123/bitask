@@ -1,23 +1,23 @@
 # Findings
 
-Non-obvious toolchain behaviour found while building layer 1. Each entry gives what we expected, what happened, the evidence (real captured output), and what changed as a result.
+Non-obvious toolchain behaviour found while building layer 1. Each entry gives what we expected, what happened, the evidence (real captured output), and what changed.
+
+Evidence for findings 1, 2, 3, 5, 6 and 7 was re-captured with the final harness. Findings 4 and 8 cannot be reproduced with the current code and environment, so their original captures are kept, with a note on when each was taken.
 
 ## 1. ASan accepts the naive malloc(0) fix; `-fsanitize=unsigned-integer-overflow` catches it
 
 **Expected.** The case 01 naive fix, `malloc(total + 1)` with `total = n - 1` kept, fails the hidden test, which calls `join_words(NULL, 0, ',')`. The spec said the terminator write would overflow a zero-byte allocation.
 
-**What happened.** It does not, under ASan. For `n == 0`, `total` is `SIZE_MAX`, so `total + 1` wraps to 0. `malloc(0)` returns a one-byte block, and the terminator write lands inside it. ASan reports nothing. The naive fix passes the hidden test. The behaviour is still undefined by the C standard, but no sanitizer sees it.
+**What happened.** It does not, under ASan. For `n == 0`, `total` is `SIZE_MAX`, so `total + 1` wraps to 0. `malloc(0)` returns a one-byte block, and the terminator write lands inside it. ASan reports nothing, and the naive fix passes the hidden test. The behaviour is still undefined by the C standard, but no sanitizer sees it.
 
-**Evidence.** Before the flag (same naive fix, `extra_flags` empty):
-
-```
-naive (spec), hidden, WITHOUT unsigned flag  stage=ok
-```
-
-With the flag:
+**Evidence.** Re-captured with the final harness. Same naive fix, same hidden test, with and without the flag:
 
 ```
-naive (spec), hidden   stage=sanitizer
+without flag: stage=ok summary=None
+```
+
+```
+with flag: stage=sanitizer summary="buggy.c:15:22: runtime error: unsigned integer overflow: 0 - 1 cannot be represented in type 'size_t' (aka 'unsigned long')"
 buggy.c:15:22: runtime error: unsigned integer overflow: 0 - 1 cannot be represented in type 'size_t' (aka 'unsigned long')
     #0 0xADDR in join_words buggy.c:15:22
     #1 0xADDR in main hidden_test.c:7:17
@@ -33,22 +33,16 @@ SUMMARY: UndefinedBehaviorSanitizer: undefined-behavior buggy.c:15:22
 
 **What happened.** UBSan's object-size check fires first, on the same store, with the weaker message `insufficient space for an object`. It has no allocation stack.
 
-**Evidence.** The same write-past-malloc candidate, with and without `-fno-sanitize=object-size`, from the Phase 3 ablation:
-
-With `-fno-sanitize=object-size` (the harness default when `address` and `undefined` are both on):
+**Evidence.** Re-captured with the final harness. The same write-past-malloc candidate, with the harness's `-fno-sanitize=object-size` and without it (the ablation):
 
 ```
+with -fno-sanitize=object-size (harness default): stage=sanitizer summary='AddressSanitizer: heap-buffer-overflow buggy.c:8:17 in add'
 ==PID==ERROR: AddressSanitizer: heap-buffer-overflow on address 0xADDR at pc 0xADDR bp 0xADDR sp 0xADDR
-WRITE of size 4 at 0xADDR thread T0
-    #0 0xADDR in add buggy.c:8:17
-    ...
-SUMMARY: AddressSanitizer: heap-buffer-overflow buggy.c:8:17 in add
 ```
 
-Without it:
-
 ```
-SUMMARY: buggy.c:8:5: runtime error: store to address 0xADDR with insufficient space for an object of type 'int'
+without it (ablation): stage=sanitizer summary="buggy.c:8:5: runtime error: store to address 0xADDR with insufficient space for an object of type 'int'"
+buggy.c:8:5: runtime error: store to address 0xADDR with insufficient space for an object of type 'int'
 ```
 
 **What changed.** `_compile_flags()` adds `-fno-sanitize=object-size` when both `address` and `undefined` are on. A test checks this for four sanitizer sets, and the write-past-malloc test checks for `heap-buffer-overflow`.
@@ -59,23 +53,23 @@ SUMMARY: buggy.c:8:5: runtime error: store to address 0xADDR with insufficient s
 
 **What happened.** At `-O1`, clang deletes the unused `malloc`/`free` pair along with the out-of-bounds store. The binary has nothing left to report. ASan's instrumentation runs after this deletion, so it never sees the access.
 
-**Evidence.** The same program, without and with the pointer escaping:
-
-Pointer never escapes (`p` is used only for the store):
+**Evidence.** Re-captured with raw clang-18 and ASan, outside the harness. The same program, without and with the pointer escaping:
 
 ```
-exit=0 stderr=''
+pointer never escapes: exit=0 stderr=''
 ```
 
-Pointer stored in a volatile global, so the allocation must survive (this variant appears only in a scratch test, never in candidate code):
+```
+pointer escapes (harness-style): exit=1 first_line='================================================================='
+```
 
-```
-exit=1 first_line='================================================================='
-```
+The escaping variant stores the pointer in a volatile global, which is valid only in this throwaway test program, never in candidate code. The harness's fixtures use an external-linkage global or a function defined in the test file instead.
 
 **What changed.** Every fixture meant to trigger a sanitizer makes its effect observable. Either the pointer or value is returned to the test, or it goes to an external-linkage global, which the optimiser must keep. The write-past fixture in `tests/test_toolchain.py` uses an external-linkage global. The leak fixture passes its pointer to a function defined in the test file. No candidate uses `volatile`. The starter-case suite catches any regression: each buggy version must fail at its expected stage.
 
 ## 4. TSan fails at mmap_rnd_bits=32 with "CHECK failed", not "unexpected memory mapping"
+
+*Captured in Phase 1, before later cleaning changes. This finding cannot be reproduced with the current system setting, which the harness's fix script has changed to 28, so the original captures are kept as they were.*
 
 **Expected.** The spec said TSan fails on high-entropy kernels with `unexpected memory mapping`, which the harness would report as `harness_error`. The documented fix was `setarch $(uname -m) -R`.
 
@@ -110,12 +104,15 @@ After `scripts/fix-aslr.sh` sets the value to 28:
 
 **What happened.** The build ID is a hash of the binary. The binary embeds the workdir path in its debug info, and each run uses a new workdir, so the build ID differs between runs.
 
-**Evidence.** The determinism test failed on this diff, comparing two runs of the same write-past source:
+**Evidence.** Re-captured with the final harness. Two runs of the same write-past source:
 
 ```
-- (BuildId: c442906302f0e36f5af55b3736c5a8adc87e159b)
-+ (BuildId: b3773942f8f7135d7c2ae5827f239bd0dce1be60)
+run 1 BuildIds for test_bin: ['cf15ddf4db3dcef7765afffd813e3720541a2c36']
+run 2 BuildIds for test_bin: ['bd5594e3af59124f03f9c3f30263d6cc70015cc5']
+same cleaned output: True
 ```
+
+The raw stderr differs by build ID. The cleaned output is identical, because the `BuildId: [0-9a-f]+` masking removes it.
 
 **What changed.** `BuildId: [0-9a-f]+` is masked to `BuildId: BUILDID`. The frame-suffix rule then strips `(BuildId: ...)` from stack frames. The masked list is in `docs/harness.md`. Code offsets such as `test_bin+0xdeca6` are deterministic and are not masked.
 
@@ -125,11 +122,12 @@ After `scripts/fix-aslr.sh` sets the value to 28:
 
 **What happened.** The summary line is `SUMMARY: AddressSanitizer: ...`, because LSan shares ASan's reporting code. The `ERROR:` line names it correctly.
 
-**Evidence.**
+**Evidence.** Re-captured with the final harness, from a leaking candidate:
 
 ```
-==10==ERROR: LeakSanitizer: detected memory leaks
-SUMMARY: AddressSanitizer: 16 byte(s) leaked in 1 allocation(s).
+stage=sanitizer summary='LeakSanitizer: 16 byte(s) leaked in 1 allocation(s)'
+raw ERROR line: ==72==ERROR: LeakSanitizer: detected memory leaks
+raw SUMMARY line: SUMMARY: AddressSanitizer: 16 byte(s) leaked in 1 allocation(s).
 ```
 
 LSan also exits 1 by default, not 23.
@@ -142,20 +140,31 @@ LSan also exits 1 by default, not 23.
 
 **What happened.** Under strict ISO mode, glibc hides POSIX declarations unless a feature macro such as `_POSIX_C_SOURCE` is set. Without it, `fork()`, `pid_t` and `_exit` are undeclared, and the candidate fails to compile.
 
-**Evidence.**
+**Evidence.** Re-captured with raw clang-18, `-std=c11 -Wall -Werror`, with the macro removed from the fixture:
 
 ```
-c.c:6:5: error: use of undeclared identifier 'pid_t'
+exit=1
+/tmp/tmpcvzupm9n/fork.c:6:5: error: use of undeclared identifier 'pid_t'
     6 |     pid_t child = fork();
       |     ^
-c.c:7:9: error: use of undeclared identifier 'child'; did you mean 'while'?
-...
+/tmp/tmpcvzupm9n/fork.c:7:9: error: use of undeclared identifier 'child'; did you mean 'while'?
+    7 |     if (child == 0) { sleep(100); _exit(0); }
+      |         ^~~~~
+      |         while
+/tmp/tmpcvzupm9n/fork.c:7:9: error: expected expression
+/tmp/tmpcvzupm9n/fork.c:9:38: error: use of undeclared identifier 'child'
+    9 |     if (f) { fprintf(f, "%d\n", (int)child); fclose(f); }
+      |                                      ^
 4 errors generated.
 ```
+
+The path in the compiler message is the throwaway workdir, shown here as raw compiler output.
 
 **What changed.** Test fixtures that call `fork()` define `_POSIX_C_SOURCE 200809L` at the top. The timeout test depends on this. The finding matters for LLM-written candidates, which will use POSIX calls. The harness does not add the macro itself, so the standard stays as the case sets it.
 
 ## 8. The hidden-test bug: caught by the starter cases, not by the unit tests
+
+*Original capture, from Phase 4, before the fix. The harness no longer produces this output. The fixed behaviour is pinned by the regression test `test_hidden_test_is_the_one_compiled_and_run`, which passes on the current code.*
 
 **Expected.** The Phase 3 unit tests covered the hidden path, so `test="hidden"` was checked.
 
@@ -164,7 +173,7 @@ c.c:7:9: error: use of undeclared identifier 'child'; did you mean 'while'?
 - The unit tests only ever passed the visible test name, so the hidden path was never exercised.
 - The check "buggy does not pass the hidden test" passed for the wrong reason. The visible test file was missing from the workdir, so every hidden run reported `harness_error`, which counts as not passing.
 
-**Evidence.** A starter-case run before the fix:
+**Evidence.** The starter-case run before the fix:
 
 ```
 test file failed to compile, this is a case bug

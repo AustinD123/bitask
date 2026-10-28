@@ -146,7 +146,14 @@ The original assignment's guideline is about 500 lines for the whole core. The s
 
 ## Next steps
 
-The planned next kind is a `project` case, with multi-file code and build systems. The harness would reuse `classify_run()` and the cleaning rules unchanged. Real C and C++ bug catalogues would supply its cases. Two I could verify are [BUGSC++](https://conf.researchr.org/details/ase-2023/ase-2023-tool-demonstrations/1/BUGSC-A-Highly-Usable-Real-World-Defect-Benchmark-for-C-C-), a 2023 benchmark of 209 real bugs from 22 C and C++ projects, each in a Docker container, and [Defects4C](https://conf.researchr.org/details/ase-2025/ase-2025-papers/9/Defects4C-Benchmarking-Large-Language-Model-Repair-Capability-with-C-C-Bugs), a 2025 benchmark for LLM repair of C and C++ bugs. The C-CppBench catalogue named in the plan is not linked here, because I could not locate it.
+The planned next kind is a `project` case, with multi-file code and build systems. The harness would reuse `classify_run()` and the cleaning rules unchanged.
+
+Real-world cases will be picked from the public C/C++ LLM benchmark catalogue at [ByteAsk/C-CppBench](https://github.com/ByteAsk/C-CppBench), which lists 96 benchmarks. It is a README, not runnable cases. The candidates for the real-world track are:
+
+- ARVO
+- Defects4C
+- BugsCpp
+- VulnLoc / ExtractFix
 
 ## Documentation
 
