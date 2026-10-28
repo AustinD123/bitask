@@ -28,7 +28,7 @@ def isolated(tmp_path, monkeypatch):
     """Keep the cache and the run logs in tmp_path, and use two keys so the key pool is exercised."""
     monkeypatch.setattr(llm, "CACHE_DIR", tmp_path / "cache")
     monkeypatch.setattr(loop, "RUNS_DIR", tmp_path / "runs")
-    monkeypatch.setenv("LLM_API_KEYS", "key-one")
+    monkeypatch.setenv("LLM_API_KEY", "key-one")
 
 
 def use(monkeypatch, script: list) -> MockProvider:

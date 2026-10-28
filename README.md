@@ -91,11 +91,11 @@ Every attempt is logged to `out/runs/` with its prompt, reply, code, verdict, to
 
 ## Groq setup
 
-The default provider is Groq's free tier through its OpenAI-compatible API. Put the keys in `.env`, which is git-ignored:
+The default provider is Groq's free tier through its OpenAI-compatible API. Put the key in `.env`, which is git-ignored:
 
 ```bash
 cp .env.example .env
-# then edit .env and set LLM_API_KEYS=gsk_first,gsk_second,gsk_third
+# then edit .env and set LLM_API_KEY=gsk_...
 ```
 
 The fix and bench commands read it with `--env-file .env`. You can also export the variables in your shell instead; the commands accept either.
@@ -104,13 +104,11 @@ The fix and bench commands read it with `--env-file .env`. You can also export t
 |---|---|---|
 | `LLM_PROVIDER` | `openai` | `openai` (any OpenAI-compatible API) or `anthropic` |
 | `LLM_BASE_URL` | `https://api.groq.com/openai/v1` | used only by `openai` |
-| `LLM_API_KEYS` | none | comma-separated keys, tried in order |
-| `LLM_API_KEY` | none | one key, used if `LLM_API_KEYS` is unset |
-| `GROQ_API_KEY` | none | one key, used if the two above are unset |
-| `GROQ_KEY_1`, `GROQ_KEY_2`, ... | none | numbered keys, used if none of the above are set, in numeric order |
+| `LLM_API_KEY` | none | the API key |
+| `GROQ_API_KEY` | none | the API key, used if `LLM_API_KEY` is unset |
 | `LLM_MODEL` | `openai/gpt-oss-20b` | the default `--model` for `fix` |
 
-**Key rotation.** When a key's daily quota for a model is used up, that key is skipped for that model until UTC midnight and the next key is used. A key that is exhausted for `gpt-oss-120b` can still serve `gpt-oss-20b`. The exhausted keys are stored by hash in `out/cache/exhausted.json`, so a restarted run does not spend a call to find out again. When every key is exhausted for a model, the run stops with `DailyLimitReached`.
+**One key.** A single key is used, from `LLM_API_KEY` or `GROQ_API_KEY`. Groq's limits are per organisation, so rotating keys does not add quota.
 
 **Limits.** Roughly 8K tokens per minute and 200K tokens per day per model, resetting at UTC midnight (check the Limits page in the Groq console). Per-minute limits are waited out, using the `retry-after` header, up to three retries.
 
@@ -127,7 +125,7 @@ docker run --rm --env-file .env -v "$PWD":/work:ro -v "$PWD/out":/work/out verif
     python3 -m verifyloop.cli bench --models openai/gpt-oss-20b,openai/gpt-oss-120b --trials 2
 ```
 
-`--env-file .env` passes every variable in `.env` into the container. Without the file, `-e LLM_API_KEYS` passes one host variable. `--network` is not given, so the default bridge network is used.
+`--env-file .env` passes every variable in `.env` into the container. Without the file, `-e LLM_API_KEY` passes one host variable. `--network` is not given, so the default bridge network is used.
 
 `fix` prints one line per attempt, then a coloured diff, the checks that passed, and the hidden-test result. Exit code 0 means it passed the visible test. `bench` runs every case × model × trial, and `--cases '0[1-5]*'` selects a subset. It writes `out/results/results.json` and `out/results/results.md`. When the daily limit runs out, it saves progress, prints `daily limit reached for <model>; re-run after reset to resume`, and exits with code 0.
 
@@ -148,7 +146,7 @@ bitask/
   verifyloop/
     case.py                    Case, load_case(), validation
     toolchain.py               verify(), classify_run(), clean_output(), VerifyResult
-    llm.py                     complete(): cache, 429 retries, key rotation, MockProvider
+    llm.py                     complete(): cache, 429 retries, MockProvider
     loop.py                    fix(): attempts, guardrails, compact retries, hidden test, logs
     bench.py                   run_bench(): one-shot vs loop table and pass rates
     cli.py                     verify, fix and bench subcommands
@@ -198,7 +196,7 @@ The full list, with evidence, is in [docs/findings.md](docs/findings.md). These 
 
 Actual counts, in `verifyloop/` (code lines, excluding docstrings, comments and blank lines): `case.py` 122, `toolchain.py` 338. Together that is 460 against a budget of about 450, and the Layer 1 spec's `cli.py` budget of about 60 is exceeded at 127 (62 before the `fix` and `bench` subcommands).
 
-Layer 2 modules, against the budgets in its spec: `llm.py` 148 against about 80 (it also holds the key rotation, which the spec did not list), `loop.py` 117 against about 100, `bench.py` 97 against about 100. The budgets were not trimmed to hit.
+Layer 2 modules, against the budgets in its spec: `llm.py` 148 against about 80 , `loop.py` 117 against about 100, `bench.py` 97 against about 100. The budgets were not trimmed to hit.
 
 The original assignment's guideline is about 500 lines for the whole core. The spec's own harness target was about 250. The lines went into verification, because it is the product: the spec's features (three-step compile, a TSan preflight, bounded output capture, a pure classifier, deterministic cleaning, and the sanitizer summaries) cannot be dropped without losing what the harness is for.
 

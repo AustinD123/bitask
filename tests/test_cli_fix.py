@@ -18,7 +18,7 @@ REFERENCE = (FIXTURE / "reference_fix.c").read_text(encoding="utf-8")
 def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(llm, "CACHE_DIR", tmp_path / "cache")
     monkeypatch.setattr(loop, "RUNS_DIR", tmp_path / "runs")
-    monkeypatch.setenv("LLM_API_KEYS", "key-one")
+    monkeypatch.setenv("LLM_API_KEY", "key-one")
     monkeypatch.setenv("NO_COLOR", "1")
 
 
@@ -56,9 +56,8 @@ def test_no_code_block_is_reported_as_an_attempt(monkeypatch, capsys) -> None:
 
 
 def test_missing_key_is_an_error_not_a_traceback(monkeypatch, capsys) -> None:
-    monkeypatch.delenv("LLM_API_KEYS")
+    monkeypatch.delenv("LLM_API_KEY")
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
-    monkeypatch.delenv("LLM_API_KEY", raising=False)
     assert cli.main(["fix", "--case", str(FIXTURE), "--model", "m"]) == 2
     assert "no API key" in capsys.readouterr().err
 

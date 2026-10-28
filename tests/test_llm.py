@@ -4,8 +4,6 @@ Each test points the cache at a temporary directory and replaces the sleep,
 so retries are instant and nothing is written to out/.
 """
 
-import hashlib
-
 import pytest
 
 from verifyloop import llm
@@ -16,10 +14,11 @@ MESSAGES = [{"role": "system", "content": "You fix bugs."}, {"role": "user", "co
 
 @pytest.fixture(autouse=True)
 def isolated(tmp_path, monkeypatch):
-    """Send the cache to tmp_path, record sleeps instead of taking them, and set two keys."""
+    """Send the cache to tmp_path, record sleeps instead of taking them, and set one key."""
     monkeypatch.setattr(llm, "CACHE_DIR", tmp_path / "cache")
     monkeypatch.setattr(llm, "_sleep", lambda seconds: sleeps.append(seconds))
-    monkeypatch.setenv("LLM_API_KEYS", "key-one,key-two")
+    monkeypatch.setenv("LLM_API_KEY", "key-one")
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
     monkeypatch.delenv("LLM_PROVIDER", raising=False)
     sleeps: list[float] = []
     return sleeps
@@ -40,11 +39,11 @@ def daily_limit() -> RateLimited:
 
 
 def test_reply_is_returned_and_usage_recorded(monkeypatch) -> None:
-    use(monkeypatch, MockProvider(["hello"]))
+    provider = use(monkeypatch, MockProvider(["hello"]))
     text, usage = llm.complete(MESSAGES, "openai/gpt-oss-20b")
     assert text == "hello"
     assert usage["cache_hit"] is False
-    assert usage["key"] == hashlib.sha256(b"key-one").hexdigest()[:8]
+    assert provider.calls[0]["key"] == "key-one"
 
 
 def test_cache_hit_makes_no_second_call(monkeypatch) -> None:
@@ -63,6 +62,13 @@ def test_cache_key_changes_with_model(monkeypatch) -> None:
     assert len(provider.calls) == 2
 
 
+def test_cache_key_changes_with_trial(monkeypatch) -> None:
+    provider = use(monkeypatch, MockProvider(["first", "second"]))
+    assert llm.complete(MESSAGES, "m", trial=1)[0] == "first"
+    assert llm.complete(MESSAGES, "m", trial=2)[0] == "second"
+    assert len(provider.calls) == 2
+
+
 def test_minute_limit_waits_and_retries_then_succeeds(monkeypatch, isolated) -> None:
     provider = use(monkeypatch, MockProvider([minute_limit("5"), minute_limit("6"), "ok"]))
     assert llm.complete(MESSAGES, "m")[0] == "ok"
@@ -77,77 +83,31 @@ def test_minute_limit_gives_up_after_three_retries(monkeypatch) -> None:
     assert len(provider.calls) == 4  # the first call plus three retries
 
 
-def test_daily_limit_raises_without_waiting_when_no_other_key(monkeypatch, isolated) -> None:
-    monkeypatch.setenv("LLM_API_KEYS", "only-key")
-    use(monkeypatch, MockProvider([daily_limit()]))
+def test_daily_limit_raises_at_once_without_waiting(monkeypatch, isolated) -> None:
+    provider = use(monkeypatch, MockProvider([daily_limit()]))
     with pytest.raises(DailyLimitReached, match="daily limit reached for m"):
         llm.complete(MESSAGES, "m")
     assert isolated == []
+    assert len(provider.calls) == 1
 
 
-def test_daily_limit_on_one_key_rotates_to_the_next(monkeypatch) -> None:
-    provider = use(monkeypatch, MockProvider([daily_limit(), "from key two"]))
-    text, _ = llm.complete(MESSAGES, "m")
-    assert text == "from key two"
-    assert [call["key"] for call in provider.calls] == ["key-one", "key-two"]
-
-
-def test_exhausted_key_is_skipped_on_later_calls(monkeypatch) -> None:
-    provider = use(monkeypatch, MockProvider([daily_limit(), "a", "b"]))
-    llm.complete(MESSAGES, "m")
-    llm.complete([{"role": "user", "content": "another"}], "m")
-    assert [call["key"] for call in provider.calls] == ["key-one", "key-two", "key-two"]
-
-
-def test_daily_limit_is_per_model(monkeypatch) -> None:
-    provider = use(monkeypatch, MockProvider([daily_limit(), "small on key two", "large on key one"]))
-    llm.complete(MESSAGES, "openai/gpt-oss-120b")
-    llm.complete(MESSAGES, "openai/gpt-oss-20b")
-    assert provider.calls[2]["key"] == "key-one"
-
-
-def test_daily_limit_on_every_key_raises(monkeypatch) -> None:
-    use(monkeypatch, MockProvider([daily_limit(), daily_limit()]))
-    with pytest.raises(DailyLimitReached):
-        llm.complete(MESSAGES, "m")
-    # A second call in the same day stops at once, with no provider call at all.
-    with pytest.raises(DailyLimitReached):
-        llm.complete(MESSAGES, "m")
-
-
-def test_exhausted_keys_persist_across_processes(monkeypatch) -> None:
-    use(monkeypatch, MockProvider([daily_limit(), "x"]))
-    llm.complete(MESSAGES, "m")
-    # A fresh provider, as a new process would have, must not send key-one again.
-    provider = use(monkeypatch, MockProvider(["y"]))
-    llm.complete([{"role": "user", "content": "new"}], "m")
-    assert provider.calls[0]["key"] == "key-two"
-
-
-def test_no_keys_is_a_clear_error(monkeypatch) -> None:
-    monkeypatch.delenv("LLM_API_KEYS")
-    monkeypatch.delenv("LLM_API_KEY", raising=False)
+def test_no_key_is_a_clear_error(monkeypatch) -> None:
+    monkeypatch.delenv("LLM_API_KEY")
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
-    with pytest.raises(LLMError, match="no API key"):
+    with pytest.raises(LLMError, match="no API key: set LLM_API_KEY or GROQ_API_KEY"):
         llm.complete(MESSAGES, "m")
 
 
-def test_numbered_keys_are_used_in_numeric_order(monkeypatch) -> None:
-    monkeypatch.delenv("LLM_API_KEYS")
-    monkeypatch.delenv("GROQ_API_KEY", raising=False)
-    monkeypatch.setenv("GROQ_KEY_10", "tenth")
-    monkeypatch.setenv("GROQ_KEY_2", "second")
-    monkeypatch.setenv("GROQ_KEY_1", "first")
-    monkeypatch.setenv("GROQ_KEY_3", "   ")  # blank values are ignored
-    assert llm._keys() == ["first", "second", "tenth"]
-
-
-def test_single_key_fallbacks(monkeypatch) -> None:
-    monkeypatch.delenv("LLM_API_KEYS")
+def test_llm_api_key_is_preferred_over_groq_api_key(monkeypatch) -> None:
     monkeypatch.setenv("GROQ_API_KEY", "from-groq")
-    assert llm._keys() == ["from-groq"]
-    monkeypatch.setenv("LLM_API_KEY", "from-llm")
-    assert llm._keys() == ["from-llm"]
+    assert llm._key() == "key-one"
+    monkeypatch.delenv("LLM_API_KEY")
+    assert llm._key() == "from-groq"
+
+
+def test_key_is_stripped_of_whitespace(monkeypatch) -> None:
+    monkeypatch.setenv("LLM_API_KEY", "  key-two \n")
+    assert llm._key() == "key-two"
 
 
 @pytest.mark.parametrize("text, seconds", [
