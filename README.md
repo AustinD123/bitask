@@ -1,9 +1,6 @@
 # bitask: verification harness (layer 1)
 
-Layer 1 of the ByteAsk prototype. `verifyloop` decides whether a C or C++
-candidate compiles under `-Wall -Werror`, runs without sanitizer reports,
-and passes its tests. Later layers add an LLM that proposes fixes and a
-retry loop; neither is in this layer. The full spec is in [SPEC.md](SPEC.md).
+Layer 1 of the ByteAsk prototype. `verifyloop` decides whether a C or C++ candidate compiles under `-Wall -Werror`, runs without sanitizer reports, and passes its tests. Later layers add a model that proposes fixes and a retry loop around this check; neither is in this layer. The design is in [SPEC.md](SPEC.md). The reference is [docs/harness.md](docs/harness.md), and the non-obvious toolchain findings are in [docs/findings.md](docs/findings.md).
 
 ## Environment
 
@@ -18,74 +15,142 @@ Everything runs in Docker. Results are only meaningful inside the container.
 
 ```bash
 docker build -t verify-harness .
-docker run --rm --cap-add SYS_PTRACE --network none -v "$PWD":/work:ro verify-harness bash smoke/run_smoke.sh all
+docker run --rm --cap-add SYS_PTRACE --network none -v "$PWD":/work:ro verify-harness \
+    pytest -v -p no:cacheprovider
 ```
 
-Run the tests with (after Phase 4):
+Run the sanitizer smoke check, which compiles five small programs with the harness's flags:
 
 ```bash
-docker run --rm --cap-add SYS_PTRACE --network none -v "$PWD":/work:ro verify-harness pytest -v -p no:cacheprovider
+docker run --rm --cap-add SYS_PTRACE --network none -v "$PWD":/work:ro verify-harness \
+    bash smoke/run_smoke.sh all
 ```
 
-Flags: `--cap-add SYS_PTRACE` is needed for LeakSanitizer. `--network none` is
-deliberate: compiled code is untrusted and must not reach the network. The
-repo is mounted read-only, and workdirs live in `/tmp`.
-
-On Git Bash, prefix the command with `MSYS_NO_PATHCONV=1` so the volume path
-is not rewritten.
-
-## Troubleshooting
-
-**ThreadSanitizer aborts at startup with `CHECK failed ... personality`
-(or `unexpected memory mapping`).** TSan needs ASLR entropy at or below 28
-bits. The Docker Desktop VM kernel defaults to 32. Lower it with:
+Run the CLI on a starter case:
 
 ```bash
-sh scripts/fix-aslr.sh          # Git Bash, WSL, Linux or macOS host
+docker run --rm --cap-add SYS_PTRACE --network none -v "$PWD":/work:ro verify-harness \
+    python3 -m verifyloop.cli verify --case bench/cases/01_heap_overflow
 ```
 
-```powershell
-.\scripts\fix-aslr.ps1          # Windows PowerShell
+Flags. `--cap-add SYS_PTRACE` is needed for LeakSanitizer on some hosts. `--network none` is deliberate: compiled code is untrusted and must not reach the network. The repo is mounted read-only, and workdirs live in `/tmp`. On Git Bash, prefix commands with `MSYS_NO_PATHCONV=1` so the volume path is not rewritten.
+
+## CLI
+
+```bash
+python -m verifyloop.cli verify --case DIR [--source FILE | --reference] [--hidden] [--json] [--keep-workdir]
 ```
 
-The setting is held by the Docker Desktop VM kernel. It resets when Docker
-Desktop restarts, so run the script again after each restart.
+`--source` names a candidate file (default: the case's editable file). `--reference` uses the case's reference fix. `--hidden` runs the hidden test. `--json` prints the full result as JSON. Exit codes are `0` passed, `1` candidate failed, `2` harness error or invalid case.
 
-Two things that do **not** work here:
+A failing buggy case (visible test):
 
-- `setarch $(uname -m) -R` fails with `Operation not permitted`, because
-  Docker's default seccomp profile blocks `personality(ADDR_NO_RANDOMIZE)`.
-- Running `sudo sysctl` on Windows does nothing. The kernel that matters is
-  the Docker Desktop VM's.
+```
+FAIL [sanitizer]  01_heap_overflow (visible test, 0.95s)
+  AddressSanitizer: heap-buffer-overflow buggy.c:16:8 in join_words
+  ✓ compiled   ✗ sanitizers clean   – ran to completion   – tests passed
+  ---
+  ==PID==ERROR: AddressSanitizer: heap-buffer-overflow on address 0xADDR at pc 0xADDR bp 0xADDR sp 0xADDR
+  WRITE of size 1 at 0xADDR thread T0
+      #0 0xADDR in join_words buggy.c:16:8
+      #1 0xADDR in main test.c:9:17
 
-**How this surfaces in the harness.** Until the classifier handles it, a TSan
-startup `CHECK failed` makes the process die by SIGSEGV (exit 139), which
-looks like a candidate `crash`. It is an environment problem and must be
-reported as `harness_error` once the classifier exists.
+  0xADDR is located 0 bytes after 8-byte region [0xADDR,0xADDR)
+  allocated by thread T0 here:
+      #1 0xADDR in join_words buggy.c:8:17
+      #2 0xADDR in main test.c:9:17
 
-**LeakSanitizer fails with "encountered a fatal error".** Run with
-`--cap-add SYS_PTRACE`, as in the commands above.
+  SUMMARY: AddressSanitizer: heap-buffer-overflow buggy.c:16:8 in join_words
+```
 
-## Sanitizer behaviour verified in this environment
+The same case with its reference fix:
 
-Captured by `smoke/run_smoke.sh all` at `mmap_rnd_bits=28`:
+```
+PASS  01_heap_overflow (visible test, 0.55s)
+  ✓ compiled   ✓ sanitizers clean   ✓ ran to completion   ✓ tests passed
+```
 
-| Program | Flags | Exit | Marker | SUMMARY line |
-| --- | --- | --- | --- | --- |
-| `smoke/tsan.c` | `thread -pthread` | 66 | `WARNING: ThreadSanitizer: data race` | `SUMMARY: ThreadSanitizer: data race ...` |
-| `smoke/asan.c` | `address` | 1 | `ERROR: AddressSanitizer: heap-buffer-overflow` | `SUMMARY: AddressSanitizer: heap-buffer-overflow ...` |
-| `smoke/asan.c` | `address,undefined` | 1 | `runtime error: store to address ... insufficient space` (UBSan) | `SUMMARY: UndefinedBehaviorSanitizer: undefined-behavior ...` |
-| `smoke/ubsan.c` | `address,undefined` | 1 | `runtime error: signed integer overflow` | `SUMMARY: UndefinedBehaviorSanitizer: undefined-behavior ...` |
-| `smoke/leak.c` | `address` | 1 | `ERROR: LeakSanitizer: detected memory leaks` | `SUMMARY: AddressSanitizer: 16 byte(s) leaked ...` |
+The sanitizer summary sits under the verdict, because it is the line a reader needs first. Colour is used only on a terminal, and `NO_COLOR` turns it off.
 
-Notes:
+## Project layout
 
-- The LeakSanitizer `SUMMARY:` line says `AddressSanitizer`, not
-  `LeakSanitizer`. Match on the `ERROR: LeakSanitizer` line.
-- With `address,undefined`, UBSan's object-size check fires before ASan does
-  on a heap overflow. ASan alone reports `heap-buffer-overflow`.
-- A heap overflow whose pointer never escapes is deleted at `-O1` (with the
-  malloc/free pair), and no sanitizer fires. The smoke program stores the
-  pointer in a volatile global to prevent this.
-- TSan's report includes per-run `pid=` and `tid=` numbers. Output cleaning must mask them.
-- Unsigned wraparound is legal C, so `-fsanitize=undefined` does not report it. Case 01 adds `-fsanitize=unsigned-integer-overflow` (clang only). Without it, ASan accepts the naive fix `malloc(total + 1)` with `total = n - 1`: for `n == 0`, `total + 1` wraps to 0, so `malloc(0)` returns a one-byte block and the terminator write is in bounds. With the flag, the wrap is reported at the `n - 1` line.
+```
+bitask/
+  Dockerfile                   pinned base image, clang-18, sanitizer runtimes
+  SPEC.md                      the spec, with its decisions by phase
+  README.md                    this file
+  docs/
+    harness.md                 full reference: pipeline, case format, flags, cleaning, stages
+    findings.md                non-obvious toolchain findings, with evidence
+  verifyloop/
+    case.py                    Case, load_case(), validation
+    toolchain.py               verify(), classify_run(), clean_output(), VerifyResult
+    cli.py                     python -m verifyloop.cli verify
+  bench/
+    common/check.h             CHECK macros and the completion marker
+    cases/
+      01_heap_overflow/        case.json, lib.h, buggy.c, reference_fix.c, test.c, hidden_test.c, NOTES.md
+      02_signed_overflow/
+      03_iterator_invalidation/
+      04_data_race/
+  tests/
+    test_case_loading.py       loader and validation
+    test_toolchain.py          verify(), classifier, cleaning, determinism
+    test_starter_cases.py      every case in bench/cases, parametrised
+    test_cli.py                exit codes, output format, colour rules
+    fixtures/mini_case/        tiny synthetic case for harness tests
+    fixtures/naive_fixes/      naive fixes and manifest.json
+  smoke/                       sanitizer smoke programs and runner
+  scripts/fix-aslr.{sh,ps1}    lowers vm.mmap_rnd_bits in the Docker Desktop VM
+```
+
+## How a pass is decided
+
+Full detail is in [docs/harness.md](docs/harness.md), sections 1, 6 and 7.
+
+- **Compile in three steps.** The test file, then the candidate, then the link, all with `-Wall -Werror` and the sanitizer flags. A test file that fails to compile is a case bug (`harness_error`). A candidate that fails is `compile_error`.
+- **Run each test once per `runs`.** Each run gets a fresh nonce. The run must print `VERIFY_OK <nonce>` and exit 0.
+- **Classify in a fixed order.** Timeout, then harness problems, then sanitizer reports (whatever the exit code), then check failures or a nonzero exit, then signals, then the completion marker.
+- **Stop at the first failing run.** The result records which run failed and how many passed before it.
+- **Clean the output.** The LLM-ready output drops libc frames, strips per-run addresses and PIDs, and keeps the SUMMARY line, even when truncated. The raw output is kept alongside it.
+
+## Clang version
+
+`clang-18` `1:18.1.3-1ubuntu1`, from the Ubuntu 24.04 archive, with `libclang-rt-18-dev` for the sanitizer runtimes. Run `clang-18 --version` in the container to confirm.
+
+## Key findings
+
+The full list, with evidence, is in [docs/findings.md](docs/findings.md). These three shaped the case design most.
+
+**ASan accepts the spec's naive fix for case 01.** `malloc(total + 1)` with the underflow kept passes the hidden test under ASan, because `malloc(0)` returns a one-byte block and the terminator write is in bounds. `-fsanitize=unsigned-integer-overflow` reports the wrap at the `n - 1` line, so case 01 sets it. See [finding 1](docs/findings.md#1-asan-accepts-the-naive-malloc0-fix-fsanitizeunsigned-integer-overflow-catches-it).
+
+**UBSan's object-size check hides ASan's heap-overflow report.** With both sanitizers on, a heap overflow is reported first as UBSan's weaker "insufficient space". The harness adds `-fno-sanitize=object-size`, so ASan's `heap-buffer-overflow`, with its allocation stack, is the report. The ablation output is in [finding 2](docs/findings.md#2-ubsans-object-size-check-pre-empts-asans-heap-buffer-overflow).
+
+**At `-O1`, a heap bug whose result never escapes is deleted.** The unused `malloc` and the out-of-bounds store are removed before ASan instruments them, so the binary exits 0 with nothing to report. Fixtures must make the effect observable across the function boundary. See [finding 3](docs/findings.md#3--o1-deletes-buggy-code-whose-result-never-escapes).
+
+## Line budget
+
+Actual counts, in `verifyloop/` (code lines, excluding docstrings, comments and blank lines): `case.py` 119, `toolchain.py` 332, `cli.py` 62. The `case.py` and `toolchain.py` total is 451 against a budget of about 450, and `cli.py` is 62 against about 60.
+
+The original assignment's guideline is about 500 lines for the whole core. The spec's own harness target was about 250. The lines went into verification, because it is the product: the spec's features (three-step compile, a TSan preflight, bounded output capture, a pure classifier, deterministic cleaning, and the sanitizer summaries) cannot be dropped without losing what the harness is for.
+
+## Limitations
+
+- **Linux and Docker only.** Sanitizer behaviour differs across OSes, so macOS and Windows are not supported. The development host is Windows 11 with Docker Desktop on WSL2.
+- **No MemorySanitizer and no Valgrind.** Both are out of scope.
+- **Single-file cases only.** Each case has one editable file. Multi-file projects are a later kind.
+- **The completion marker is not adversarially secure.** `VERIFY_NONCE` is in the candidate's environment, so code that wants to pass can print the marker. The marker guards against accidental early exits, not deliberate cheating. A later phase may add a static check.
+- **`setsid` can escape `killpg`.** A candidate that starts a new session can leave its children running after a timeout. The real fix is one container per run, which is out of scope.
+- **The TSan ASLR fix resets when Docker Desktop restarts.** Run `scripts/fix-aslr.sh` or `scripts/fix-aslr.ps1` again after each restart. The preflight reports `harness_error` if the value is still too high.
+- **The sanitizer options are fixed.** Cases cannot change them, and `halt_on_error` is mostly redundant under `-fno-sanitize-recover=all`.
+
+## Next steps
+
+The planned next kind is a `project` case, with multi-file code and build systems. The harness would reuse `classify_run()` and the cleaning rules unchanged. Real C and C++ bug catalogues would supply its cases. Two I could verify are [BUGSC++](https://conf.researchr.org/details/ase-2023/ase-2023-tool-demonstrations/1/BUGSC-A-Highly-Usable-Real-World-Defect-Benchmark-for-C-C-), a 2023 benchmark of 209 real bugs from 22 C and C++ projects, each in a Docker container, and [Defects4C](https://conf.researchr.org/details/ase-2025/ase-2025-papers/9/Defects4C-Benchmarking-Large-Language-Model-Repair-Capability-with-C-C-Bugs), a 2025 benchmark for LLM repair of C and C++ bugs. The C-CppBench catalogue named in the plan is not linked here, because I could not locate it.
+
+## Documentation
+
+- [SPEC.md](SPEC.md): the design, the phases, and the decisions made in each phase.
+- [docs/harness.md](docs/harness.md): the full reference. Pipeline, case format, compile flags, environment variables, classification, stages, cleaning, troubleshooting, and how to add a case.
+- [docs/findings.md](docs/findings.md): eight findings with evidence and the change each one caused.
+- `bench/cases/*/NOTES.md`: for each case, the bug, the sanitizer output, the reference fix, the naive fix, and the stage tables.

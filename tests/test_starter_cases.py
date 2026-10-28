@@ -59,6 +59,12 @@ def test_naive_fix_fails_hidden_test_at_recorded_stage(case) -> None:
     assert not hidden.passed
 
 
+def test_notes_file_exists_and_is_not_empty(case) -> None:
+    notes = case.directory / "NOTES.md"
+    assert notes.is_file(), f"write {notes.name} for {case.id}"
+    assert notes.read_text(encoding="utf-8").strip(), f"{notes.name} for {case.id} is empty"
+
+
 def test_volatile_variant_of_04_is_caught_by_tsan_on_visible_test() -> None:
     case = load_case(CASES_DIR / "04_data_race")
     result = verify_file(NAIVE_DIR / "04_data_race_volatile.c", case)
