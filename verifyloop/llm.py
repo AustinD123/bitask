@@ -26,6 +26,7 @@ DEFAULT_WAIT_S = 10.0
 MAX_TOKENS = 4000
 _DURATION = re.compile(r"(?:(\d+)m(?!s))?(?:(\d+(?:\.\d+)?)s)?(?:(\d+)ms)?")
 _DAILY = re.compile(r"per day|\bTPD\b|\bRPD\b")
+_NUMBERED = re.compile(r"GROQ_(?:API_)?KEY_(\d+)")
 _sleep = time.sleep  # a module attribute so tests can replace it
 
 
@@ -165,11 +166,16 @@ def _backend():
 
 
 def _keys() -> list[str]:
-    """Keys from LLM_API_KEYS (comma-separated), else LLM_API_KEY, else GROQ_API_KEY."""
+    """Keys from LLM_API_KEYS (comma-separated), else LLM_API_KEY, else GROQ_API_KEY, else numbered
+    GROQ_KEY_1..n (or GROQ_API_KEY_1..n), tried in numeric order."""
     raw = os.environ.get("LLM_API_KEYS") or os.environ.get("LLM_API_KEY") or os.environ.get("GROQ_API_KEY", "")
     keys = [key.strip() for key in raw.split(",") if key.strip()]
     if not keys:
-        raise LLMError("no API key: set LLM_API_KEYS (comma-separated), LLM_API_KEY or GROQ_API_KEY")
+        numbered = sorted((int(m.group(1)), value.strip()) for name, value in os.environ.items()
+                          if (m := _NUMBERED.fullmatch(name)) and value.strip())
+        keys = [value for _, value in numbered]
+    if not keys:
+        raise LLMError("no API key: set LLM_API_KEYS (comma-separated), LLM_API_KEY, GROQ_API_KEY or GROQ_KEY_1..n")
     return keys
 
 

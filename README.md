@@ -107,6 +107,7 @@ The fix and bench commands read it with `--env-file .env`. You can also export t
 | `LLM_API_KEYS` | none | comma-separated keys, tried in order |
 | `LLM_API_KEY` | none | one key, used if `LLM_API_KEYS` is unset |
 | `GROQ_API_KEY` | none | one key, used if the two above are unset |
+| `GROQ_KEY_1`, `GROQ_KEY_2`, ... | none | numbered keys, used if none of the above are set, in numeric order |
 | `LLM_MODEL` | `openai/gpt-oss-20b` | the default `--model` for `fix` |
 
 **Key rotation.** When a key's daily quota for a model is used up, that key is skipped for that model until UTC midnight and the next key is used. A key that is exhausted for `gpt-oss-120b` can still serve `gpt-oss-20b`. The exhausted keys are stored by hash in `out/cache/exhausted.json`, so a restarted run does not spend a call to find out again. When every key is exhausted for a model, the run stops with `DailyLimitReached`.

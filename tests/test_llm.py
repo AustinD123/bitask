@@ -132,6 +132,16 @@ def test_no_keys_is_a_clear_error(monkeypatch) -> None:
         llm.complete(MESSAGES, "m")
 
 
+def test_numbered_keys_are_used_in_numeric_order(monkeypatch) -> None:
+    monkeypatch.delenv("LLM_API_KEYS")
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    monkeypatch.setenv("GROQ_KEY_10", "tenth")
+    monkeypatch.setenv("GROQ_KEY_2", "second")
+    monkeypatch.setenv("GROQ_KEY_1", "first")
+    monkeypatch.setenv("GROQ_KEY_3", "   ")  # blank values are ignored
+    assert llm._keys() == ["first", "second", "tenth"]
+
+
 def test_single_key_fallbacks(monkeypatch) -> None:
     monkeypatch.delenv("LLM_API_KEYS")
     monkeypatch.setenv("GROQ_API_KEY", "from-groq")
