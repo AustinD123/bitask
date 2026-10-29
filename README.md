@@ -131,7 +131,49 @@ docker run --rm --env-file .env -v "$PWD":/work:ro -v "$PWD/out":/work/out verif
 
 ### Results
 
-The results table comes from the real run and is added once that run is complete.
+Run inside the container on 2026-10-29, against Groq's free tier. Each model ran all ten starter cases, twice. Results are in `out/results/results.md` and `out/results/results.json`, which the `bench` command writes.
+
+| case | model | one-shot visible | one-shot hidden | loop visible | loop hidden | avg attempts |
+|---|---|---|---|---|---|---|
+| 01_heap_overflow | openai/gpt-oss-20b | 2/2 | 2/2 | 2/2 | 2/2 | 1.0 |
+| 01_heap_overflow | openai/gpt-oss-120b | 2/2 | 2/2 | 2/2 | 2/2 | 1.0 |
+| 02_signed_overflow | openai/gpt-oss-20b | 2/2 | 1/2 | 2/2 | 1/2 | 1.0 |
+| 02_signed_overflow | openai/gpt-oss-120b | 2/2 | 2/2 | 2/2 | 2/2 | 1.0 |
+| 03_iterator_invalidation | openai/gpt-oss-20b | 2/2 | 2/2 | 2/2 | 2/2 | 1.0 |
+| 03_iterator_invalidation | openai/gpt-oss-120b | 2/2 | 2/2 | 2/2 | 2/2 | 1.0 |
+| 04_data_race | openai/gpt-oss-20b | 2/2 | 2/2 | 2/2 | 2/2 | 1.0 |
+| 04_data_race | openai/gpt-oss-120b | 2/2 | 2/2 | 2/2 | 2/2 | 1.0 |
+| 05_use_after_free | openai/gpt-oss-20b | 2/2 | 2/2 | 2/2 | 2/2 | 1.0 |
+| 05_use_after_free | openai/gpt-oss-120b | 2/2 | 2/2 | 2/2 | 2/2 | 1.0 |
+| 06_double_free | openai/gpt-oss-20b | 2/2 | 2/2 | 2/2 | 2/2 | 1.0 |
+| 06_double_free | openai/gpt-oss-120b | 2/2 | 2/2 | 2/2 | 2/2 | 1.0 |
+| 07_off_by_one | openai/gpt-oss-20b | 2/2 | 2/2 | 2/2 | 2/2 | 1.0 |
+| 07_off_by_one | openai/gpt-oss-120b | 2/2 | 2/2 | 2/2 | 2/2 | 1.0 |
+| 08_memory_leak | openai/gpt-oss-20b | 2/2 | 2/2 | 2/2 | 2/2 | 1.0 |
+| 08_memory_leak | openai/gpt-oss-120b | 2/2 | 2/2 | 2/2 | 2/2 | 1.0 |
+| 09_null_deref | openai/gpt-oss-20b | 2/2 | 2/2 | 2/2 | 2/2 | 1.0 |
+| 09_null_deref | openai/gpt-oss-120b | 2/2 | 2/2 | 2/2 | 2/2 | 1.0 |
+| 10_uninitialised_read | openai/gpt-oss-20b | 2/2 | 2/2 | 2/2 | 2/2 | 1.0 |
+| 10_uninitialised_read | openai/gpt-oss-120b | 2/2 | 2/2 | 2/2 | 2/2 | 1.0 |
+
+Overall:
+
+| model | one-shot visible | one-shot hidden | loop visible | loop hidden |
+|---|---|---|---|---|
+| openai/gpt-oss-20b | 20/20 (100%) | 19/20 (95%) | 20/20 (100%) | 19/20 (95%) |
+| openai/gpt-oss-120b | 20/20 (100%) | 20/20 (100%) | 20/20 (100%) | 20/20 (100%) |
+
+Both gpt-oss models passed every visible test on the first attempt, in all 40 runs. The loop never needed a retry, so these numbers do not show the loop helping. The loop matters for a weaker model, and this run did not include one (see below).
+
+**Highlight: a visible pass that fails the hidden test.** `02_signed_overflow`, gpt-oss-20b, trial 2. The visible test checks `midpoint(INT_MAX - 1, INT_MAX)`, and the candidate passed it. The hidden test also checks `midpoint(INT_MIN, INT_MIN)`, which the candidate got wrong. The candidate widened the sum to `long long` and computed the floor with `-(int)(((-sum) + 1) / 2)`. For `INT_MIN + INT_MIN` the value `(-sum + 1) / 2` is 2^31, which does not fit in an `int`, so the cast wraps to `INT_MIN` and the negation overflows. UBSan reports `negation of -2147483648 cannot be represented in type 'int'`. This is not the naive `a + (b - a) / 2` fix. The other gpt-oss-20b trial on the same case passed both tests, which shows that the failure depends on the sample.
+
+**Not run: `llama-3.1-8b-instant`.** The intent was a weaker, non-reasoning model, to see whether the loop helps. Groq's model list for this key no longer includes it, so the bench returned a 404 and stopped. No rows exist for that model.
+
+**Caveats**
+
+- Two trials per model is a small sample. One hidden failure in 40 runs is not a reliable rate.
+- The ten cases are small, well-known bugs, so the models may have seen similar code in training. These numbers do not show how the models handle unfamiliar bugs.
+- The results describe these two models on these ten cases, not the models in general.
 
 ## Project layout
 
@@ -196,7 +238,8 @@ The full list, with evidence, is in [docs/findings.md](docs/findings.md). These 
 
 Actual counts, in `verifyloop/` (code lines, excluding docstrings, comments and blank lines): `case.py` 122, `toolchain.py` 338. Together that is 460 against a budget of about 450, and the Layer 1 spec's `cli.py` budget of about 60 is exceeded at 127 (62 before the `fix` and `bench` subcommands).
 
-Layer 2 modules, against the budgets in its spec: `llm.py` 148 against about 80 , `loop.py` 117 against about 100, `bench.py` 97 against about 100. The budgets were not trimmed to hit.
+Layer 2 modules, against the budgets in its spec: `llm.py` 126 against about 80, `loop.py` 117 against about 100, `bench.py` 97 against about 100, `cli.py` 127. `llm.py` is over its budget. The budgets were not trimmed to hit.
+
 
 The original assignment's guideline is about 500 lines for the whole core. The spec's own harness target was about 250. The lines went into verification, because it is the product: the spec's features (three-step compile, a TSan preflight, bounded output capture, a pure classifier, deterministic cleaning, and the sanitizer summaries) cannot be dropped without losing what the harness is for.
 

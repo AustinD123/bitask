@@ -1,0 +1,406 @@
+{
+  "generated": "2026-10-29T09:55:34+00:00",
+  "stopped": null,
+  "rows": [
+    {
+      "case": "01_heap_overflow",
+      "model": "openai/gpt-oss-20b",
+      "trial": 1,
+      "one_visible": true,
+      "one_hidden": true,
+      "loop_visible": true,
+      "loop_hidden": true,
+      "attempts": 1
+    },
+    {
+      "case": "01_heap_overflow",
+      "model": "openai/gpt-oss-20b",
+      "trial": 2,
+      "one_visible": true,
+      "one_hidden": true,
+      "loop_visible": true,
+      "loop_hidden": true,
+      "attempts": 1
+    },
+    {
+      "case": "01_heap_overflow",
+      "model": "openai/gpt-oss-120b",
+      "trial": 1,
+      "one_visible": true,
+      "one_hidden": true,
+      "loop_visible": true,
+      "loop_hidden": true,
+      "attempts": 1
+    },
+    {
+      "case": "01_heap_overflow",
+      "model": "openai/gpt-oss-120b",
+      "trial": 2,
+      "one_visible": true,
+      "one_hidden": true,
+      "loop_visible": true,
+      "loop_hidden": true,
+      "attempts": 1
+    },
+    {
+      "case": "02_signed_overflow",
+      "model": "openai/gpt-oss-20b",
+      "trial": 1,
+      "one_visible": true,
+      "one_hidden": true,
+      "loop_visible": true,
+      "loop_hidden": true,
+      "attempts": 1
+    },
+    {
+      "case": "02_signed_overflow",
+      "model": "openai/gpt-oss-20b",
+      "trial": 2,
+      "one_visible": true,
+      "one_hidden": false,
+      "loop_visible": true,
+      "loop_hidden": false,
+      "attempts": 1
+    },
+    {
+      "case": "02_signed_overflow",
+      "model": "openai/gpt-oss-120b",
+      "trial": 1,
+      "one_visible": true,
+      "one_hidden": true,
+      "loop_visible": true,
+      "loop_hidden": true,
+      "attempts": 1
+    },
+    {
+      "case": "02_signed_overflow",
+      "model": "openai/gpt-oss-120b",
+      "trial": 2,
+      "one_visible": true,
+      "one_hidden": true,
+      "loop_visible": true,
+      "loop_hidden": true,
+      "attempts": 1
+    },
+    {
+      "case": "03_iterator_invalidation",
+      "model": "openai/gpt-oss-20b",
+      "trial": 1,
+      "one_visible": true,
+      "one_hidden": true,
+      "loop_visible": true,
+      "loop_hidden": true,
+      "attempts": 1
+    },
+    {
+      "case": "03_iterator_invalidation",
+      "model": "openai/gpt-oss-20b",
+      "trial": 2,
+      "one_visible": true,
+      "one_hidden": true,
+      "loop_visible": true,
+      "loop_hidden": true,
+      "attempts": 1
+    },
+    {
+      "case": "03_iterator_invalidation",
+      "model": "openai/gpt-oss-120b",
+      "trial": 1,
+      "one_visible": true,
+      "one_hidden": true,
+      "loop_visible": true,
+      "loop_hidden": true,
+      "attempts": 1
+    },
+    {
+      "case": "03_iterator_invalidation",
+      "model": "openai/gpt-oss-120b",
+      "trial": 2,
+      "one_visible": true,
+      "one_hidden": true,
+      "loop_visible": true,
+      "loop_hidden": true,
+      "attempts": 1
+    },
+    {
+      "case": "04_data_race",
+      "model": "openai/gpt-oss-20b",
+      "trial": 1,
+      "one_visible": true,
+      "one_hidden": true,
+      "loop_visible": true,
+      "loop_hidden": true,
+      "attempts": 1
+    },
+    {
+      "case": "04_data_race",
+      "model": "openai/gpt-oss-20b",
+      "trial": 2,
+      "one_visible": true,
+      "one_hidden": true,
+      "loop_visible": true,
+      "loop_hidden": true,
+      "attempts": 1
+    },
+    {
+      "case": "04_data_race",
+      "model": "openai/gpt-oss-120b",
+      "trial": 1,
+      "one_visible": true,
+      "one_hidden": true,
+      "loop_visible": true,
+      "loop_hidden": true,
+      "attempts": 1
+    },
+    {
+      "case": "04_data_race",
+      "model": "openai/gpt-oss-120b",
+      "trial": 2,
+      "one_visible": true,
+      "one_hidden": true,
+      "loop_visible": true,
+      "loop_hidden": true,
+      "attempts": 1
+    },
+    {
+      "case": "05_use_after_free",
+      "model": "openai/gpt-oss-20b",
+      "trial": 1,
+      "one_visible": true,
+      "one_hidden": true,
+      "loop_visible": true,
+      "loop_hidden": true,
+      "attempts": 1
+    },
+    {
+      "case": "05_use_after_free",
+      "model": "openai/gpt-oss-20b",
+      "trial": 2,
+      "one_visible": true,
+      "one_hidden": true,
+      "loop_visible": true,
+      "loop_hidden": true,
+      "attempts": 1
+    },
+    {
+      "case": "05_use_after_free",
+      "model": "openai/gpt-oss-120b",
+      "trial": 1,
+      "one_visible": true,
+      "one_hidden": true,
+      "loop_visible": true,
+      "loop_hidden": true,
+      "attempts": 1
+    },
+    {
+      "case": "05_use_after_free",
+      "model": "openai/gpt-oss-120b",
+      "trial": 2,
+      "one_visible": true,
+      "one_hidden": true,
+      "loop_visible": true,
+      "loop_hidden": true,
+      "attempts": 1
+    },
+    {
+      "case": "06_double_free",
+      "model": "openai/gpt-oss-20b",
+      "trial": 1,
+      "one_visible": true,
+      "one_hidden": true,
+      "loop_visible": true,
+      "loop_hidden": true,
+      "attempts": 1
+    },
+    {
+      "case": "06_double_free",
+      "model": "openai/gpt-oss-20b",
+      "trial": 2,
+      "one_visible": true,
+      "one_hidden": true,
+      "loop_visible": true,
+      "loop_hidden": true,
+      "attempts": 1
+    },
+    {
+      "case": "06_double_free",
+      "model": "openai/gpt-oss-120b",
+      "trial": 1,
+      "one_visible": true,
+      "one_hidden": true,
+      "loop_visible": true,
+      "loop_hidden": true,
+      "attempts": 1
+    },
+    {
+      "case": "06_double_free",
+      "model": "openai/gpt-oss-120b",
+      "trial": 2,
+      "one_visible": true,
+      "one_hidden": true,
+      "loop_visible": true,
+      "loop_hidden": true,
+      "attempts": 1
+    },
+    {
+      "case": "07_off_by_one",
+      "model": "openai/gpt-oss-20b",
+      "trial": 1,
+      "one_visible": true,
+      "one_hidden": true,
+      "loop_visible": true,
+      "loop_hidden": true,
+      "attempts": 1
+    },
+    {
+      "case": "07_off_by_one",
+      "model": "openai/gpt-oss-20b",
+      "trial": 2,
+      "one_visible": true,
+      "one_hidden": true,
+      "loop_visible": true,
+      "loop_hidden": true,
+      "attempts": 1
+    },
+    {
+      "case": "07_off_by_one",
+      "model": "openai/gpt-oss-120b",
+      "trial": 1,
+      "one_visible": true,
+      "one_hidden": true,
+      "loop_visible": true,
+      "loop_hidden": true,
+      "attempts": 1
+    },
+    {
+      "case": "07_off_by_one",
+      "model": "openai/gpt-oss-120b",
+      "trial": 2,
+      "one_visible": true,
+      "one_hidden": true,
+      "loop_visible": true,
+      "loop_hidden": true,
+      "attempts": 1
+    },
+    {
+      "case": "08_memory_leak",
+      "model": "openai/gpt-oss-20b",
+      "trial": 1,
+      "one_visible": true,
+      "one_hidden": true,
+      "loop_visible": true,
+      "loop_hidden": true,
+      "attempts": 1
+    },
+    {
+      "case": "08_memory_leak",
+      "model": "openai/gpt-oss-20b",
+      "trial": 2,
+      "one_visible": true,
+      "one_hidden": true,
+      "loop_visible": true,
+      "loop_hidden": true,
+      "attempts": 1
+    },
+    {
+      "case": "08_memory_leak",
+      "model": "openai/gpt-oss-120b",
+      "trial": 1,
+      "one_visible": true,
+      "one_hidden": true,
+      "loop_visible": true,
+      "loop_hidden": true,
+      "attempts": 1
+    },
+    {
+      "case": "08_memory_leak",
+      "model": "openai/gpt-oss-120b",
+      "trial": 2,
+      "one_visible": true,
+      "one_hidden": true,
+      "loop_visible": true,
+      "loop_hidden": true,
+      "attempts": 1
+    },
+    {
+      "case": "09_null_deref",
+      "model": "openai/gpt-oss-20b",
+      "trial": 1,
+      "one_visible": true,
+      "one_hidden": true,
+      "loop_visible": true,
+      "loop_hidden": true,
+      "attempts": 1
+    },
+    {
+      "case": "09_null_deref",
+      "model": "openai/gpt-oss-20b",
+      "trial": 2,
+      "one_visible": true,
+      "one_hidden": true,
+      "loop_visible": true,
+      "loop_hidden": true,
+      "attempts": 1
+    },
+    {
+      "case": "09_null_deref",
+      "model": "openai/gpt-oss-120b",
+      "trial": 1,
+      "one_visible": true,
+      "one_hidden": true,
+      "loop_visible": true,
+      "loop_hidden": true,
+      "attempts": 1
+    },
+    {
+      "case": "09_null_deref",
+      "model": "openai/gpt-oss-120b",
+      "trial": 2,
+      "one_visible": true,
+      "one_hidden": true,
+      "loop_visible": true,
+      "loop_hidden": true,
+      "attempts": 1
+    },
+    {
+      "case": "10_uninitialised_read",
+      "model": "openai/gpt-oss-20b",
+      "trial": 1,
+      "one_visible": true,
+      "one_hidden": true,
+      "loop_visible": true,
+      "loop_hidden": true,
+      "attempts": 1
+    },
+    {
+      "case": "10_uninitialised_read",
+      "model": "openai/gpt-oss-20b",
+      "trial": 2,
+      "one_visible": true,
+      "one_hidden": true,
+      "loop_visible": true,
+      "loop_hidden": true,
+      "attempts": 1
+    },
+    {
+      "case": "10_uninitialised_read",
+      "model": "openai/gpt-oss-120b",
+      "trial": 1,
+      "one_visible": true,
+      "one_hidden": true,
+      "loop_visible": true,
+      "loop_hidden": true,
+      "attempts": 1
+    },
+    {
+      "case": "10_uninitialised_read",
+      "model": "openai/gpt-oss-120b",
+      "trial": 2,
+      "one_visible": true,
+      "one_hidden": true,
+      "loop_visible": true,
+      "loop_hidden": true,
+      "attempts": 1
+    }
+  ]
+}
