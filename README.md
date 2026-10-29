@@ -1,292 +1,158 @@
-# bitask: verification harness (layer 1)
+# bitask: verifying LLM-written C/C++ fixes
 
-Layer 1 of the ByteAsk prototype. `verifyloop` decides whether a C or C++ candidate compiles under `-Wall -Werror`, runs without sanitizer reports, and passes its tests. Later layers add a model that proposes fixes and a retry loop around this check; neither is in this layer. The design is in [SPEC.md](SPEC.md). The reference is [docs/harness.md](docs/harness.md), and the non-obvious toolchain findings are in [docs/findings.md](docs/findings.md).
+Language models write C and C++ fixes that look right. This project checks each fix with the real toolchain (`clang -Werror`, ASan, UBSan, TSan and the case's own tests) and with held-out tests before accepting it, and it feeds the failures back to the model.
 
-## Environment
+## What I found
 
-Everything runs in Docker. Results are only meaningful inside the container.
-
-- Base image: `ubuntu:24.04@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac`
-- clang: `clang-18` package `1:18.1.3-1ubuntu1` (reports `Ubuntu clang version 18.1.3`)
-- Sanitizer runtimes: `libclang-rt-18-dev` `1:18.1.3-1ubuntu1`
-- Tested on Windows 11, Docker Desktop 29.1.5, WSL2 kernel `6.6.87.2-microsoft-standard-WSL2`
-
-## Quickstart
-
-```bash
-docker build -t verify-harness .
-docker run --rm --cap-add SYS_PTRACE --network none -v "$PWD":/work:ro verify-harness \
-    python3 -m pytest -v -p no:cacheprovider
-```
-
-`python3 -m pytest` rather than `pytest`: the image has a venv with the LLM SDKs, and the bare `pytest` binary runs outside it.
-
-Run the sanitizer smoke check, which compiles five small programs with the harness's flags:
-
-```bash
-docker run --rm --cap-add SYS_PTRACE --network none -v "$PWD":/work:ro verify-harness \
-    bash smoke/run_smoke.sh all
-```
-
-Run the CLI on a starter case:
-
-```bash
-docker run --rm --cap-add SYS_PTRACE --network none -v "$PWD":/work:ro verify-harness \
-    python3 -m verifyloop.cli verify --case bench/cases/01_heap_overflow
-```
-
-Flags. `--cap-add SYS_PTRACE` is needed for LeakSanitizer on some hosts. `--network none` is deliberate: compiled code is untrusted and must not reach the network. The repo is mounted read-only, and workdirs live in `/tmp`. On Git Bash, prefix commands with `MSYS_NO_PATHCONV=1` so the volume path is not rewritten.
-
-## CLI
-
-```bash
-python -m verifyloop.cli verify --case DIR [--source FILE | --reference] [--hidden] [--json] [--keep-workdir]
-```
-
-`--source` names a candidate file (default: the case's editable file). `--reference` uses the case's reference fix. `--hidden` runs the hidden test. `--json` prints the full result as JSON. Exit codes are `0` passed, `1` candidate failed, `2` harness error or invalid case.
-
-A failing buggy case (visible test):
-
-```
-FAIL [sanitizer]  01_heap_overflow (visible test, 0.95s)
-  AddressSanitizer: heap-buffer-overflow buggy.c:16:8 in join_words
-  ✓ compiled   ✗ sanitizers clean   – ran to completion   – tests passed
-  ---
-  ==PID==ERROR: AddressSanitizer: heap-buffer-overflow on address 0xADDR at pc 0xADDR bp 0xADDR sp 0xADDR
-  WRITE of size 1 at 0xADDR thread T0
-      #0 0xADDR in join_words buggy.c:16:8
-      #1 0xADDR in main test.c:9:17
-
-  0xADDR is located 0 bytes after 8-byte region [0xADDR,0xADDR)
-  allocated by thread T0 here:
-      #1 0xADDR in join_words buggy.c:8:17
-      #2 0xADDR in main test.c:9:17
-
-  SUMMARY: AddressSanitizer: heap-buffer-overflow buggy.c:16:8 in join_words
-```
-
-The same case with its reference fix:
-
-```
-PASS  01_heap_overflow (visible test, 0.55s)
-  ✓ compiled   ✓ sanitizers clean   ✓ ran to completion   ✓ tests passed
-```
-
-The sanitizer summary sits under the verdict, because it is the line a reader needs first. Colour is used only on a terminal, and `NO_COLOR` turns it off.
-
-## How the fix loop works
-
-Layer 2 asks a language model to fix the buggy file, then checks the fix with the same harness.
-
-1. **Attempt 1** sends a short system prompt, the buggy file, the header and the visible test. The hidden test is never sent.
-2. The **last fenced code block** in the reply is the candidate. No block is a failed attempt.
-3. **Guardrails** reject a candidate that mentions `no_sanitize`, `__asan`, `VERIFY_NONCE`, or a `#pragma` diagnostic, clang or GCC directive. A rejected candidate is not compiled.
-4. Otherwise `verify()` runs the **visible** test. A pass stops the loop.
-5. A **retry** sends the original task, the previous attempt, and only the latest cleaned failure. Older attempts are not sent.
-6. After the loop (at most `--max-attempts`), the first candidate and the final candidate each run on the **hidden** test, recorded separately.
-
-Every attempt is logged to `out/runs/` with its prompt, reply, code, verdict, tokens, latency and whether it was a cache hit. A provider error (a non-429 API failure) ends its run as `llm_error`. The run is logged and counted as a failure, and the bench moves on to the next run. A daily limit still stops the whole bench.
-
-**One-shot** is attempt 1 of the same run, so the benchmark costs no extra call. **Trials** are part of the cache key, so trial 2 is a real repeat, not a cache hit. Replies are cached in `out/cache/`, so a re-run of the same command makes no API call.
-
-## Groq setup
-
-The default provider is Groq's free tier through its OpenAI-compatible API. Put the key in `.env`, which is git-ignored:
-
-```bash
-cp .env.example .env
-# then edit .env and set LLM_API_KEY=gsk_...
-```
-
-The fix and bench commands read it with `--env-file .env`. You can also export the variables in your shell instead; the commands accept either.
-
-| variable | default | meaning |
-|---|---|---|
-| `LLM_PROVIDER` | `openai` | `openai` (any OpenAI-compatible API) or `anthropic` |
-| `LLM_BASE_URL` | `https://api.groq.com/openai/v1` | used only by `openai` |
-| `LLM_API_KEY` | none | the API key |
-| `GROQ_API_KEY` | none | the API key, used if `LLM_API_KEY` is unset |
-| `LLM_MODEL` | `openai/gpt-oss-20b` | the default `--model` for `fix` |
-
-**One key.** A single key is used, from `LLM_API_KEY` or `GROQ_API_KEY`. Groq's limits are per organisation, so rotating keys does not add quota.
-
-**Limits.** Roughly 8K tokens per minute and 200K tokens per day per model, resetting at UTC midnight (check the Limits page in the Groq console). Per-minute limits are waited out, using the `retry-after` header, up to three retries.
-
-## Fix and bench commands
-
-Both run LLM-generated code, so they run in a container **with network access**, unlike the tests. The container needs a writable `out/`:
-
-```bash
-mkdir -p out
-docker run --rm --env-file .env -v "$PWD":/work:ro -v "$PWD/out":/work/out verify-harness \
-    python3 -m verifyloop.cli fix --case bench/cases/02_signed_overflow --model openai/gpt-oss-20b
-
-docker run --rm --env-file .env -v "$PWD":/work:ro -v "$PWD/out":/work/out verify-harness \
-    python3 -m verifyloop.cli bench --models openai/gpt-oss-20b,openai/gpt-oss-120b --trials 2
-```
-
-`--env-file .env` passes every variable in `.env` into the container. Without the file, `-e LLM_API_KEY` passes one host variable. `--network` is not given, so the default bridge network is used.
-
-`fix` prints one line per attempt, then a coloured diff, the checks that passed, and the hidden-test result. Exit code 0 means it passed the visible test. `bench` runs every case × model × trial, and `--cases '0[1-5]*'` selects a subset. It writes `out/results/results.json` and `out/results/results.md`. When the daily limit runs out, it saves progress, prints `daily limit reached for <model>; re-run after reset to resume`, and exits with code 0.
-
-### Results
-
-Run inside the container on 2026-10-29, against Groq's free tier. Each model ran all ten starter cases, twice. Results are in `out/results/results.md` and `out/results/results.json`, which the `bench` command writes.
-
-| case | model | one-shot visible | one-shot hidden | loop visible | loop hidden | avg attempts |
-|---|---|---|---|---|---|---|
-| 01_heap_overflow | openai/gpt-oss-20b | 2/2 | 2/2 | 2/2 | 2/2 | 1.0 |
-| 01_heap_overflow | openai/gpt-oss-120b | 2/2 | 2/2 | 2/2 | 2/2 | 1.0 |
-| 02_signed_overflow | openai/gpt-oss-20b | 2/2 | 1/2 | 2/2 | 1/2 | 1.0 |
-| 02_signed_overflow | openai/gpt-oss-120b | 2/2 | 2/2 | 2/2 | 2/2 | 1.0 |
-| 03_iterator_invalidation | openai/gpt-oss-20b | 2/2 | 2/2 | 2/2 | 2/2 | 1.0 |
-| 03_iterator_invalidation | openai/gpt-oss-120b | 2/2 | 2/2 | 2/2 | 2/2 | 1.0 |
-| 04_data_race | openai/gpt-oss-20b | 2/2 | 2/2 | 2/2 | 2/2 | 1.0 |
-| 04_data_race | openai/gpt-oss-120b | 2/2 | 2/2 | 2/2 | 2/2 | 1.0 |
-| 05_use_after_free | openai/gpt-oss-20b | 2/2 | 2/2 | 2/2 | 2/2 | 1.0 |
-| 05_use_after_free | openai/gpt-oss-120b | 2/2 | 2/2 | 2/2 | 2/2 | 1.0 |
-| 06_double_free | openai/gpt-oss-20b | 2/2 | 2/2 | 2/2 | 2/2 | 1.0 |
-| 06_double_free | openai/gpt-oss-120b | 2/2 | 2/2 | 2/2 | 2/2 | 1.0 |
-| 07_off_by_one | openai/gpt-oss-20b | 2/2 | 2/2 | 2/2 | 2/2 | 1.0 |
-| 07_off_by_one | openai/gpt-oss-120b | 2/2 | 2/2 | 2/2 | 2/2 | 1.0 |
-| 08_memory_leak | openai/gpt-oss-20b | 2/2 | 2/2 | 2/2 | 2/2 | 1.0 |
-| 08_memory_leak | openai/gpt-oss-120b | 2/2 | 2/2 | 2/2 | 2/2 | 1.0 |
-| 09_null_deref | openai/gpt-oss-20b | 2/2 | 2/2 | 2/2 | 2/2 | 1.0 |
-| 09_null_deref | openai/gpt-oss-120b | 2/2 | 2/2 | 2/2 | 2/2 | 1.0 |
-| 10_uninitialised_read | openai/gpt-oss-20b | 2/2 | 2/2 | 2/2 | 2/2 | 1.0 |
-| 10_uninitialised_read | openai/gpt-oss-120b | 2/2 | 2/2 | 2/2 | 2/2 | 1.0 |
-
-Overall:
-
-| model | one-shot visible | one-shot hidden | loop visible | loop hidden |
-|---|---|---|---|---|
-| openai/gpt-oss-20b | 20/20 (100%) | 19/20 (95%) | 20/20 (100%) | 19/20 (95%) |
-| openai/gpt-oss-120b | 20/20 (100%) | 20/20 (100%) | 20/20 (100%) | 20/20 (100%) |
-
-Both gpt-oss models passed every visible test on the first attempt, in all 40 runs. The loop never needed a retry, so these numbers do not show the loop helping. The loop matters for a weaker model, and this run did not include one (see below).
-
-**Highlight: the fix that passed the visible test and failed the hidden one.** `02_signed_overflow`, gpt-oss-20b, trial 2. The original bug is the overflow in `(a + b) / 2`. The candidate removed that overflow by widening the sum to `long long`, but its floor adjustment added a new undefined behaviour. The final candidate's return line is:
+**1. A fix can pass the visible test and still add undefined behaviour.** For `midpoint` (case 02), gpt-oss-20b removed the original overflow but added a new one at `INT_MIN`. Its final return line:
 
 ```c
 return - (int)(((-sum) + 1) / 2);
 ```
 
-For `midpoint(INT_MIN, INT_MIN)`, `(-sum + 1) / 2` is 2^31, which does not fit in an `int`, so the cast wraps to `INT_MIN` and the negation overflows. The visible test never uses `INT_MIN`, so it passed. The hidden test does, and UBSan reports it. The cleaned hidden-test output is:
+The visible test passed clean under the sanitizers. Only the hidden test caught it, with this cleaned UBSan output:
 
 ```
 buggy.c:22:16: runtime error: negation of -2147483648 cannot be represented in type 'int'; cast to an unsigned type to negate this value to itself
-    #0 0xADDR in midpoint buggy.c:22:16
-    #1 0xADDR in main hidden_test.c:11:5
-
 SUMMARY: UndefinedBehaviorSanitizer: undefined-behavior buggy.c:22:16
 ```
 
-This is not the naive `a + (b - a) / 2` fix. The other gpt-oss-20b trial on the same case passed both tests.
+**2. Default ASan accepts a plausible wrong fix.** Case 01's naive fix, `malloc(total + 1)`, passes ASan alone: `malloc(0)` returns a one-byte block, so the terminator write is in bounds. `-fsanitize=unsigned-integer-overflow` reports the wrap, so the harness enables it. See [finding 1](docs/findings.md#1-asan-accepts-the-naive-malloc0-fix--fsanitizeunsigned-integer-overflow-catches-it).
 
-**Not run: `llama-3.1-8b-instant`.** The intent was a weaker, non-reasoning model, to see whether the loop helps. Groq's model list for this key no longer includes it, so the bench returned a 404 and stopped. No rows exist for that model.
+**3. UBSan can hide ASan's heap report.** With both sanitizers on, UBSan's object-size check reports a heap overflow as a weaker "insufficient space" message in place of ASan's `heap-buffer-overflow`. The harness adds `-fno-sanitize=object-size`. See [finding 2](docs/findings.md#2-ubsans-object-size-check-pre-empts-asans-heap-buffer-overflow).
 
-**Caveats**
+**4. At `-O1` the compiler deletes buggy code whose result never escapes.** The unused allocation and the out-of-bounds store are removed before ASan sees them, so the binary exits 0 with nothing to report. Tests must make the effect observable across the function boundary. See [finding 3](docs/findings.md#3--o1-deletes-buggy-code-whose-result-never-escapes). On Docker Desktop, TSan also fails unless `vm.mmap_rnd_bits` is 28 or lower; see [finding 4](docs/findings.md#4-tsan-fails-at-mmap_rnd_bits32-with-check-failed-not-unexpected-memory-mapping).
 
-- Two trials per model is a small sample. One hidden failure in 40 runs is not a reliable rate.
-- The ten cases are small, well-known bugs, so the models may have seen similar code in training. These numbers do not show how the models handle unfamiliar bugs.
-- The results describe these two models on these ten cases, not the models in general.
+The full evidence for each finding is in [docs/findings.md](docs/findings.md).
 
-## Project layout
+## How it works
+
+```mermaid
+flowchart TD
+    M["Model reply"] --> R["Last fenced code block is the candidate"]
+    R -- none --> F
+    R --> G{"Guardrails"}
+    G -- banned pattern --> F
+    G -- allowed --> C["Compile in 3 steps: test, candidate, link<br/>-Wall -Werror, sanitizer flags"]
+    C --> V["Run the visible test"]
+    V --> S{"Stage ok?"}
+    S -- yes --> H["Hidden test on attempt 1 and on the final candidate"]
+    S -- no --> F["Clean the output, send only the latest failure back"]
+    F -- "fewer than 5 attempts" --> M
+    F -- "5 attempts" --> H
+```
+
+Attempt 1 gets the buggy file and the visible test. Each retry gets the task, the previous attempt and the cleaned failure, and nothing older. The hidden test is never sent to the model. It runs after the loop, on attempt 1's candidate and on the final one, and the two verdicts are recorded separately.
+
+| Stage | Meaning |
+| --- | --- |
+| `ok` | Compiled, and every run passed |
+| `compile_error` | The candidate failed to compile or link |
+| `sanitizer` | A sanitizer report, from any run |
+| `test_fail` | A check failed, the exit code was nonzero, or the completion marker was missing |
+| `crash` | Killed by a signal that no sanitizer caught |
+| `timeout` | Exceeded the time limit |
+| `harness_error` | An environment problem, not the candidate's fault |
+| `rejected` | A banned pattern was found, so the candidate was not compiled |
+| `no_code` | The reply had no fenced code block |
+| `llm_error` | A provider error other than a rate limit. The run ends and the bench continues |
+
+## Results
+
+Two models, ten cases, two trials each. Pass counts over the 20 runs per model:
+
+| model | one-shot visible / hidden | loop visible / hidden |
+| --- | --- | --- |
+| `openai/gpt-oss-20b` | 20/20 / 19/20 | 20/20 / 19/20 |
+| `openai/gpt-oss-120b` | 20/20 / 20/20 | 20/20 / 20/20 |
+
+- Both models passed every visible test on the first attempt, in all 40 runs. The retry path was never exercised, so these numbers do not show what the loop adds.
+- The one hidden failure is the case-02 finding above: gpt-oss-20b, trial 2. Its other trial on the same case passed both tests.
+- These are small samples. Two trials per model and ten small, well-known bugs that are likely in model training data. Treat the rates as indicative only. Per-case rows are in [out/results/results.md](out/results/results.md).
+
+## Benchmark cases
+
+| case | bug | sanitizers | what the hidden test checks |
+| --- | --- | --- | --- |
+| 01_heap_overflow | `join_words` allocates no room for the NUL | ASan, UBSan | Edge cases. The naive fix passes ASan alone and fails once the unsigned-overflow check is on |
+| 02_signed_overflow | `midpoint` overflows in `int`, and truncates instead of flooring | ASan, UBSan | `INT_MIN` and `INT_MAX` extremes and the floor cases. The naive `a + (b - a) / 2` fails here |
+| 03_iterator_invalidation | `push_back` reallocates the vector, so the loop's iterator points at freed memory | ASan, UBSan | Empty input, no evens, spare capacity, mixed signs. The naive fix fails even the visible test, with a UBSan overflow |
+| 04_data_race | worker threads increment a shared counter without synchronisation | TSan | Several calls in one process. A naive atomic counter that never resets gives 41000 instead of 40000 |
+| 05_use_after_free | `format_pair` frees its buffer, then returns it | ASan, UBSan | Two results alive at once, and a negative value |
+| 06_double_free | `upper_copy` frees its result on empty input | ASan, UBSan | The empty string first, then mixed case |
+| 07_off_by_one | `sum_values` uses `i <= n`, reading one int past the end | ASan, UBSan | An empty array (a one-byte block) and a single element |
+| 08_memory_leak | `word_count` never frees its copy of the input | ASan (LeakSanitizer) | Leading and repeated spaces. The leak itself is reported on every run |
+| 09_null_deref | `label_length` passes a NULL to `strlen` | ASan, UBSan | A negative level, and the middle label |
+| 10_uninitialised_read | `sum_upto` never initialises its accumulator | ASan, UBSan | The empty range and a longer range. `-Werror` rejects the buggy file first (`-Wuninitialized`) |
+
+Cases 01–04 each have a naive fix recorded in `tests/fixtures/naive_fixes/`, which the tests check. Cases 05–10 have a reference fix only.
+
+## Try it
+
+You need Docker. The image is built on Ubuntu 24.04 with clang 18; see [docs/harness.md](docs/harness.md#environment).
+
+```bash
+docker build -t verify-harness .
+docker run --rm --cap-add SYS_PTRACE --network none -v "$PWD":/work:ro verify-harness \
+    python3 -m verifyloop.cli verify --case bench/cases/01_heap_overflow
+```
+
+The first command fails on purpose: the buggy file reports a heap-buffer-overflow under ASan. The second command runs a model on a case, and it needs a key in `.env` (`GROQ_API_KEY=...`, or `LLM_API_KEY`). See [.env.example](.env.example).
+
+```bash
+mkdir -p out
+docker run --rm --env-file .env -v "$PWD":/work:ro -v "$PWD/out":/work/out verify-harness \
+    python3 -m verifyloop.cli fix --case bench/cases/02_signed_overflow --model openai/gpt-oss-20b
+```
+
+Everything else, including the CLI flags, the `bench` command and troubleshooting, is in [docs/harness.md](docs/harness.md).
+
+## Design choices
+
+- **Held-out tests.** The hidden test is never sent to the model, and it runs only after the loop, so a fix cannot be tuned to it.
+- **A known-wrong fix for the first four cases.** Each records a naive fix, and the tests check that the hidden test rejects it, so the hidden test is shown to catch a real mistake.
+- **Per-case sanitizers.** Each case lists its sanitizers. The TSan case runs TSan alone, because ASan and TSan cannot run in one binary.
+- **Deterministic, cleaned errors.** The model gets sanitizer output with addresses and PIDs masked and libc frames dropped, so the same bug always produces the same text.
+- **Tests run offline.** The test container has `--network none`, because compiled code is untrusted. Model-written code runs only in the fix and bench container, which has network access.
+- **Cached, resumable runs.** Replies are cached by request, so a repeated command makes no new call, and a stopped bench picks up where it left off.
+
+## Limitations and next steps
+
+- Single-file cases only. Linux and Docker only. No MemorySanitizer and no Valgrind.
+- The fix and bench commands run model-written code with network access. The guardrails are not a sandbox.
+- The completion marker is not secure against deliberate cheating: `VERIFY_NONCE` is visible to candidate code.
+- The benchmark has ten starter cases and two trials per model. It is not a real-world corpus.
+- On Docker Desktop, TSan needs the ASLR fix again after each restart. See [docs/harness.md](docs/harness.md#9-troubleshooting).
+
+The next kind is a `project` case, with multi-file code and build systems, for real-world bugs. Candidates are ARVO, Defects4C, BugsCpp and VulnLoc/ExtractFix, listed in the [C-CppBench catalogue](https://github.com/ByteAsk/C-CppBench). The design is in [docs/spec.md](docs/spec.md#future-real-world-track-not-layer-1).
+
+## Repository layout
 
 ```
 bitask/
-  Dockerfile                   pinned base image, clang-18, sanitizer runtimes
-  SPEC.md                      the spec, with its decisions by phase
-  README.md                    this file
+  Dockerfile                 pinned base image, clang-18, sanitizer runtimes
+  .env.example               template for the LLM settings (copy to .env)
   docs/
-    harness.md                 full reference: pipeline, case format, flags, cleaning, stages
-    findings.md                non-obvious toolchain findings, with evidence
+    spec.md                  the design and the decisions, by phase
+    harness.md               reference: environment, CLI, pipeline, stages, fix and bench, troubleshooting
+    findings.md              toolchain findings, with evidence
   verifyloop/
-    case.py                    Case, load_case(), validation
-    toolchain.py               verify(), classify_run(), clean_output(), VerifyResult
-    llm.py                     complete(): cache, 429 retries, MockProvider
-    loop.py                    fix(): attempts, guardrails, compact retries, hidden test, logs
-    bench.py                   run_bench(): one-shot vs loop table and pass rates
-    cli.py                     verify, fix and bench subcommands
+    case.py                  case loading and validation
+    toolchain.py             verify(), the stage classifier, output cleaning
+    llm.py                   complete(): cache, rate-limit retries, providers
+    loop.py                  fix(): attempts, guardrails, retries, hidden test, logs
+    bench.py                 run_bench(): one-shot against the loop, pass rates
+    cli.py                   verify, fix and bench subcommands
   bench/
-    common/check.h             CHECK macros and the completion marker
-    cases/
-      01_heap_overflow/        case.json, lib.h, buggy.c, reference_fix.c, test.c, hidden_test.c, NOTES.md
-      02_signed_overflow/
-      03_iterator_invalidation/
-      04_data_race/
-  tests/
-    test_case_loading.py       loader and validation
-    test_toolchain.py          verify(), classifier, cleaning, determinism
-    test_starter_cases.py      every case in bench/cases, parametrised
-    test_cli.py                exit codes, output format, colour rules
-    fixtures/mini_case/        tiny synthetic case for harness tests
-    fixtures/naive_fixes/      naive fixes and manifest.json
-  smoke/                       sanitizer smoke programs and runner
-  scripts/fix-aslr.{sh,ps1}    lowers vm.mmap_rnd_bits in the Docker Desktop VM
+    common/check.h           CHECK macros and the completion marker
+    cases/NN_name/           the ten starter cases
+  tests/                     unit and starter-case tests, run in the container
+  smoke/                     sanitizer smoke programs
+  out/results/               committed benchmark results
+  scripts/fix-aslr.{sh,ps1}  lowers vm.mmap_rnd_bits in the Docker Desktop VM
 ```
 
-## How a pass is decided
-
-Full detail is in [docs/harness.md](docs/harness.md), sections 1, 6 and 7.
-
-- **Compile in three steps.** The test file, then the candidate, then the link, all with `-Wall -Werror` and the sanitizer flags. A test file that fails to compile is a case bug (`harness_error`). A candidate that fails is `compile_error`.
-- **Run each test once per `runs`.** Each run gets a fresh nonce. The run must print `VERIFY_OK <nonce>` and exit 0.
-- **Classify in a fixed order.** Timeout, then harness problems, then sanitizer reports (whatever the exit code), then check failures or a nonzero exit, then signals, then the completion marker.
-- **Stop at the first failing run.** The result records which run failed and how many passed before it.
-- **Clean the output.** The LLM-ready output drops libc frames, strips per-run addresses and PIDs, and keeps the SUMMARY line, even when truncated. The raw output is kept alongside it.
-
-## Clang version
-
-`clang-18` `1:18.1.3-1ubuntu1`, from the Ubuntu 24.04 archive, with `libclang-rt-18-dev` for the sanitizer runtimes. Run `clang-18 --version` in the container to confirm.
-
-## Key findings
-
-The full list, with evidence, is in [docs/findings.md](docs/findings.md). These three shaped the case design most.
-
-**ASan accepts the spec's naive fix for case 01.** `malloc(total + 1)` with the underflow kept passes the hidden test under ASan, because `malloc(0)` returns a one-byte block and the terminator write is in bounds. `-fsanitize=unsigned-integer-overflow` reports the wrap at the `n - 1` line, so case 01 sets it. See [finding 1](docs/findings.md#1-asan-accepts-the-naive-malloc0-fix-fsanitizeunsigned-integer-overflow-catches-it).
-
-**UBSan's object-size check hides ASan's heap-overflow report.** With both sanitizers on, a heap overflow is reported first as UBSan's weaker "insufficient space". The harness adds `-fno-sanitize=object-size`, so ASan's `heap-buffer-overflow`, with its allocation stack, is the report. The ablation output is in [finding 2](docs/findings.md#2-ubsans-object-size-check-pre-empts-asans-heap-buffer-overflow).
-
-**At `-O1`, a heap bug whose result never escapes is deleted.** The unused `malloc` and the out-of-bounds store are removed before ASan instruments them, so the binary exits 0 with nothing to report. Fixtures must make the effect observable across the function boundary. See [finding 3](docs/findings.md#3--o1-deletes-buggy-code-whose-result-never-escapes).
-
-## Line budget
-
-Actual counts, in `verifyloop/` (code lines, excluding docstrings, comments and blank lines): `case.py` 122, `toolchain.py` 338. Together that is 460 against a budget of about 450, and the Layer 1 spec's `cli.py` budget of about 60 is exceeded at 127 (62 before the `fix` and `bench` subcommands).
-
-Layer 2 modules, against the budgets in its spec: `llm.py` 134 against about 80, `loop.py` 124 against about 100, `bench.py` 107 against about 100, `cli.py` 127. All four are over their budgets. The budgets were not trimmed to hit.
-
-
-The original assignment's guideline is about 500 lines for the whole core. The spec's own harness target was about 250. The lines went into verification, because it is the product: the spec's features (three-step compile, a TSan preflight, bounded output capture, a pure classifier, deterministic cleaning, and the sanitizer summaries) cannot be dropped without losing what the harness is for.
-
-## Limitations
-
-- **Linux and Docker only.** Sanitizer behaviour differs across OSes, so macOS and Windows are not supported. The development host is Windows 11 with Docker Desktop on WSL2.
-- **No MemorySanitizer and no Valgrind.** Both are out of scope.
-- **Single-file cases only.** Each case has one editable file. Multi-file projects are a later kind.
-- **The completion marker is not adversarially secure.** `VERIFY_NONCE` is in the candidate's environment, so code that wants to pass can print the marker. The marker guards against accidental early exits, not deliberate cheating. A later phase may add a static check.
-- **`setsid` can escape `killpg`.** A candidate that starts a new session can leave its children running after a timeout. The real fix is one container per run, which is out of scope.
-- **The TSan ASLR fix resets when Docker Desktop restarts.** Run `scripts/fix-aslr.sh` or `scripts/fix-aslr.ps1` again after each restart. The preflight reports `harness_error` if the value is still too high.
-- **The sanitizer options are fixed.** Cases cannot change them, and `halt_on_error` is mostly redundant under `-fno-sanitize-recover=all`.
-- **The fix and bench commands run LLM-generated code in a container with network access.** The candidate is compiled and run with the network on, so a bad reply could reach the network. The guardrails reject some patterns, but they are not a sandbox. Use these commands on a machine where that is acceptable. The tests stay offline.
-- **The benchmark covers only the ten starter cases.** It is not a real-world corpus, and two trials per model is a small sample. Treat the pass rates as indicative.
-
-## Next steps
-
-The planned next kind is a `project` case, with multi-file code and build systems. The harness would reuse `classify_run()` and the cleaning rules unchanged.
-
-Real-world cases will be picked from the public C/C++ LLM benchmark catalogue at [ByteAsk/C-CppBench](https://github.com/ByteAsk/C-CppBench), which lists 96 benchmarks. It is a README, not runnable cases. The candidates for the real-world track are:
-
-- **ARVO**: reproducible OSS-Fuzz C/C++ memory bugs, sanitizer-driven like ours.
-- **Defects4C**: executable real C/C++ bugs with test-based repair validation.
-- **BugsCpp**: real C/C++ bugs packaged with build, test and coverage tooling.
-- **VulnLoc / ExtractFix**: small C memory-safety repair datasets.
-
-They need a `project` case kind, which is not implemented yet. Layer 1 accepts only `single_file`. The design is in [SPEC.md](SPEC.md), under "Future: real-world track".
-
-## Documentation
-
-- [SPEC.md](SPEC.md): the design, the phases, and the decisions made in each phase.
-- [docs/harness.md](docs/harness.md): the full reference. Pipeline, case format, compile flags, environment variables, classification, stages, cleaning, troubleshooting, and how to add a case.
-- [docs/findings.md](docs/findings.md): eight findings with evidence and the change each one caused.
-- `bench/cases/*/NOTES.md`: for each case, the bug, the sanitizer output, the reference fix, the naive fix, and the stage tables.
+- [docs/spec.md](docs/spec.md): the design and the decisions made in each phase.
+- [docs/harness.md](docs/harness.md): the full reference.
+- [docs/findings.md](docs/findings.md): eight toolchain findings, with evidence.
+- `bench/cases/*/NOTES.md`: each case's bug, sanitizer output, fixes and stage table. For example, [01_heap_overflow](bench/cases/01_heap_overflow/NOTES.md).

@@ -1,6 +1,6 @@
 #!/bin/bash
 # Sanitizer smoke check, run inside the container before any harness code.
-# Compiles each program with the exact flags from SPEC.md Step 2 and reports
+# Compiles each program with the exact flags from docs/spec.md Step 2 and reports
 # the exit code, wall time, sanitizer markers and SUMMARY line of each run.
 # Usage (inside container): bash smoke/run_smoke.sh [tsan|asan|asan-only|ubsan|lsan|all]
 set -u
@@ -15,7 +15,7 @@ echo "kernel: $(uname -r)  mmap_rnd_bits: $(cat /proc/sys/vm/mmap_rnd_bits)"
 run_one() {
     name=$1; sanitizers=$2; extra=$3
     bin="$out/$name.$(echo "$sanitizers" | tr ',' '_')"
-    # Same flag set as the harness compile step (SPEC.md, Step 2).
+    # Same flag set as the harness compile step (docs/spec.md, Step 2).
     if ! $CC -std=c11 -g -O1 -fno-omit-frame-pointer \
             -fsanitize="$sanitizers" -fno-sanitize-recover=all \
             -Wall -Werror $extra "$src/$name.c" -o "$bin"; then

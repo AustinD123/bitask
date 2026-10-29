@@ -179,7 +179,7 @@ def classify_run(
 ) -> tuple[str, str]:
     """Classify one run's outcome. This is a pure function with no I/O.
 
-    Rules are applied in the order given in SPEC.md, Step 4. The first match decides.
+    Rules are applied in the order given in docs/spec.md, Step 4. The first match decides.
     ``harness_error`` is checked before the sanitizer markers because TSan's own
     startup failures also print to stderr.
 
@@ -293,7 +293,7 @@ def _build(case: Case, workdir: Path, test_name: str) -> tuple[str | None, str, 
 
 
 def _compile_flags(case: Case, workdir: Path) -> list[str]:
-    """Flags shared by all three compile steps (SPEC.md, Step 2)."""
+    """Flags shared by all three compile steps (docs/spec.md, Step 2)."""
     flags = [
         f"-std={case.std}",
         "-g",  # debug info, so sanitizer reports carry file and line

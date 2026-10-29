@@ -1,8 +1,45 @@
 # Harness reference
 
-This is the reference for `verifyloop`, layer 1 of the ByteAsk prototype. For the design and the decisions behind it, see [SPEC.md](../SPEC.md). For the non-obvious toolchain behaviour found while building it, see [findings.md](findings.md).
+This is the reference for `verifyloop`, the verification harness. For the design and the decisions behind it, see [spec.md](spec.md). For the non-obvious toolchain behaviour found while building it, see [findings.md](findings.md).
 
 Every example output in this document is real output captured from the harness. Values that change between runs are shown as placeholders: `0xADDR`, `PID`, `TID`, `BUILDID`.
+
+## Environment
+
+Everything runs in Docker. Results are only meaningful inside the container.
+
+- Base image: `ubuntu:24.04@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac`
+- clang: `clang-18` package `1:18.1.3-1ubuntu1` (reports `Ubuntu clang version 18.1.3`). Sanitizer runtimes: `libclang-rt-18-dev` `1:18.1.3-1ubuntu1`. Run `clang-18 --version` in the container to confirm.
+- Tested on Windows 11, Docker Desktop 29.1.5, WSL2 kernel `6.6.87.2-microsoft-standard-WSL2`.
+
+Build the image, then run the tests:
+
+```bash
+docker build -t verify-harness .
+docker run --rm --cap-add SYS_PTRACE --network none -v "$PWD":/work:ro verify-harness \
+    python3 -m pytest -v -p no:cacheprovider
+```
+
+Use `python3 -m pytest` rather than `pytest`: the image has a venv with the LLM SDKs, and the bare `pytest` binary runs outside it.
+
+The sanitizer smoke check compiles five small programs with the harness's flags:
+
+```bash
+docker run --rm --cap-add SYS_PTRACE --network none -v "$PWD":/work:ro verify-harness \
+    bash smoke/run_smoke.sh all
+```
+
+`--cap-add SYS_PTRACE` is needed for LeakSanitizer on some hosts. `--network none` is deliberate for the tests: compiled code is untrusted and must not reach the network. The repo is mounted read-only, and workdirs live in `/tmp`. On Git Bash, prefix commands with `MSYS_NO_PATHCONV=1` so the volume path is not rewritten.
+
+## CLI
+
+```bash
+python -m verifyloop.cli verify --case DIR [--source FILE | --reference] [--hidden] [--json] [--keep-workdir]
+python -m verifyloop.cli fix --case DIR [--model M] [--max-attempts N]
+python -m verifyloop.cli bench [--models M1,M2] [--trials N] [--cases GLOB]
+```
+
+`verify` flags: `--source` names a candidate file (default: the case's editable file). `--reference` uses the case's reference fix. `--hidden` runs the hidden test. `--json` prints the full result as JSON. `--keep-workdir` keeps the temporary directory. Exit codes for `verify`: `0` passed, `1` candidate failed, `2` harness error or invalid case. `fix` and `bench` are described in section 11.
 
 ## 1. Pipeline overview
 
@@ -315,6 +352,14 @@ The fix resets when Docker Desktop restarts, so run the script again after each 
 
 **A test file does not compile.** `harness_error` with `test file failed to compile, this is a case bug`. The case itself is broken. The compiler's stderr follows in the output.
 
+**Docker commands hang, or report that they cannot connect to the Docker API.** Docker Desktop is not running or is not responding. Check with `docker info`, then start Docker Desktop and retry. After a restart, run the ASLR script above again before running the TSan cases.
+
+**`error: no API key` (exit code 2).** The `fix` and `bench` commands read `LLM_API_KEY`, or `GROQ_API_KEY` when that is unset. Set one of them in `.env` and pass `--env-file .env`. Section 11 lists the variables.
+
+**A run ends with stage `llm_error`.** A provider error other than a rate limit ended that run. The run is logged to `out/runs/` and counted as a failure, and the bench continues with the next run. The error text is in the log, and in the Provider errors section of `results.md`.
+
+**The bench stops with "daily limit reached".** The daily quota for that model is used up. The bench saves what it has finished and exits. Replies are cached, so running the same command after the reset repeats no completed call.
+
 ## 10. Adding a new case
 
 1. Create `bench/cases/NN_name/` with `case.json`, `lib.h` (or `lib.hpp`), `buggy.c`, `reference_fix.c`, `test.c`, `hidden_test.c` and `NOTES.md`.
@@ -333,3 +378,57 @@ The fix resets when Docker Desktop restarts, so run the script again after each 
 7. Run the full suite once more, to confirm nothing else changed.
 
 The starter-case suite is parametrised over `bench/cases/`, so a new directory is tested with no code changes. The naive-fix manifest is the one manual step.
+
+## 11. Fix and bench
+
+`fix` asks a model for a corrected file, then checks it with the harness. `bench` runs every case, model and trial. Both run model-written code in a container **with network access**. The candidate is compiled and run with the network on, so a bad reply could reach the network. The guardrails reject some patterns, but they are not a sandbox. Use these commands only on a machine where that is acceptable.
+
+Variables, set in `.env` (git-ignored; `.env.example` is the template):
+
+| variable | default | meaning |
+| --- | --- | --- |
+| `LLM_PROVIDER` | `openai` | `openai` (any OpenAI-compatible API) or `anthropic` |
+| `LLM_BASE_URL` | `https://api.groq.com/openai/v1` | used only by `openai` |
+| `LLM_API_KEY` | none | the API key |
+| `GROQ_API_KEY` | none | the API key, used when `LLM_API_KEY` is unset |
+| `LLM_MODEL` | `openai/gpt-oss-20b` | the default `--model` for `fix` |
+
+```bash
+mkdir -p out
+docker run --rm --env-file .env -v "$PWD":/work:ro -v "$PWD/out":/work/out verify-harness \
+    python3 -m verifyloop.cli fix --case bench/cases/02_signed_overflow --model openai/gpt-oss-20b
+
+docker run --rm --env-file .env -v "$PWD":/work:ro -v "$PWD/out":/work/out verify-harness \
+    python3 -m verifyloop.cli bench --models openai/gpt-oss-20b,openai/gpt-oss-120b --trials 2
+```
+
+`fix` prints one line per attempt, then a coloured diff, the checks that passed, and the hidden-test result. Exit code `0` means the final candidate passed the visible test. `bench` accepts `--cases GLOB` to select a subset.
+
+**Limits.** Groq's free tier limits tokens per minute and per day, per model. A per-minute 429 is waited out, using the `retry-after` header, with up to three retries. A daily 429 stops the bench, as described in the troubleshooting section.
+
+**Outputs.** Every attempt of every run is logged to `out/runs/` with its prompt, reply, code, verdict, token counts, latency and whether it was a cache hit. `bench` writes `out/results/results.json` and `out/results/results.md`. Replies are cached in `out/cache/`, keyed by provider, model, messages, settings and trial. A repeated command makes no repeated call.
+
+**Stages added by the loop.** The verification stages in section 7 apply to every attempt. The loop adds three more:
+
+| Stage | Meaning | Retried |
+| --- | --- | --- |
+| `no_code` | The reply has no fenced code block | yes |
+| `rejected` | The candidate contains a banned pattern: `no_sanitize`, `__asan`, `VERIFY_NONCE`, or a `#pragma` diagnostic, clang or GCC directive. It is not compiled | yes |
+| `llm_error` | A provider error other than a rate limit | no, the run ends |
+
+A daily limit is not a stage. It stops the whole bench.
+
+## 12. Code size
+
+Code lines in `verifyloop/`, counted without docstrings, comments or blank lines:
+
+| module | code lines | budget in the spec |
+| --- | --- | --- |
+| `case.py` | 122 | `case.py` and `toolchain.py` together: about 450 |
+| `toolchain.py` | 338 | (as above) |
+| `llm.py` | 134 | about 80 |
+| `loop.py` | 124 | about 100 |
+| `bench.py` | 107 | about 100 |
+| `cli.py` | 127 | about 60 (62 before the `fix` and `bench` subcommands) |
+
+Total: 952. The budgets are targets from the spec, not limits. The harness went over them because the verification features are the product: the three-step compile, the TSan preflight, bounded output capture, a pure classifier, deterministic cleaning and the sanitizer summaries. The spec's own harness target was about 250 lines.
