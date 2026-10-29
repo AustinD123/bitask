@@ -85,7 +85,7 @@ Layer 2 asks a language model to fix the buggy file, then checks the fix with th
 5. A **retry** sends the original task, the previous attempt, and only the latest cleaned failure. Older attempts are not sent.
 6. After the loop (at most `--max-attempts`), the first candidate and the final candidate each run on the **hidden** test, recorded separately.
 
-Every attempt is logged to `out/runs/` with its prompt, reply, code, verdict, tokens, latency and whether it was a cache hit.
+Every attempt is logged to `out/runs/` with its prompt, reply, code, verdict, tokens, latency and whether it was a cache hit. A provider error (a non-429 API failure) ends its run as `llm_error`. The run is logged and counted as a failure, and the bench moves on to the next run. A daily limit still stops the whole bench.
 
 **One-shot** is attempt 1 of the same run, so the benchmark costs no extra call. **Trials** are part of the cache key, so trial 2 is a real repeat, not a cache hit. Replies are cached in `out/cache/`, so a re-run of the same command makes no API call.
 
@@ -165,7 +165,23 @@ Overall:
 
 Both gpt-oss models passed every visible test on the first attempt, in all 40 runs. The loop never needed a retry, so these numbers do not show the loop helping. The loop matters for a weaker model, and this run did not include one (see below).
 
-**Highlight: a visible pass that fails the hidden test.** `02_signed_overflow`, gpt-oss-20b, trial 2. The visible test checks `midpoint(INT_MAX - 1, INT_MAX)`, and the candidate passed it. The hidden test also checks `midpoint(INT_MIN, INT_MIN)`, which the candidate got wrong. The candidate widened the sum to `long long` and computed the floor with `-(int)(((-sum) + 1) / 2)`. For `INT_MIN + INT_MIN` the value `(-sum + 1) / 2` is 2^31, which does not fit in an `int`, so the cast wraps to `INT_MIN` and the negation overflows. UBSan reports `negation of -2147483648 cannot be represented in type 'int'`. This is not the naive `a + (b - a) / 2` fix. The other gpt-oss-20b trial on the same case passed both tests, which shows that the failure depends on the sample.
+**Highlight: the fix that passed the visible test and failed the hidden one.** `02_signed_overflow`, gpt-oss-20b, trial 2. The original bug is the overflow in `(a + b) / 2`. The candidate removed that overflow by widening the sum to `long long`, but its floor adjustment added a new undefined behaviour. The final candidate's return line is:
+
+```c
+return - (int)(((-sum) + 1) / 2);
+```
+
+For `midpoint(INT_MIN, INT_MIN)`, `(-sum + 1) / 2` is 2^31, which does not fit in an `int`, so the cast wraps to `INT_MIN` and the negation overflows. The visible test never uses `INT_MIN`, so it passed. The hidden test does, and UBSan reports it. The cleaned hidden-test output is:
+
+```
+buggy.c:22:16: runtime error: negation of -2147483648 cannot be represented in type 'int'; cast to an unsigned type to negate this value to itself
+    #0 0xADDR in midpoint buggy.c:22:16
+    #1 0xADDR in main hidden_test.c:11:5
+
+SUMMARY: UndefinedBehaviorSanitizer: undefined-behavior buggy.c:22:16
+```
+
+This is not the naive `a + (b - a) / 2` fix. The other gpt-oss-20b trial on the same case passed both tests.
 
 **Not run: `llama-3.1-8b-instant`.** The intent was a weaker, non-reasoning model, to see whether the loop helps. Groq's model list for this key no longer includes it, so the bench returned a 404 and stopped. No rows exist for that model.
 
@@ -238,7 +254,7 @@ The full list, with evidence, is in [docs/findings.md](docs/findings.md). These 
 
 Actual counts, in `verifyloop/` (code lines, excluding docstrings, comments and blank lines): `case.py` 122, `toolchain.py` 338. Together that is 460 against a budget of about 450, and the Layer 1 spec's `cli.py` budget of about 60 is exceeded at 127 (62 before the `fix` and `bench` subcommands).
 
-Layer 2 modules, against the budgets in its spec: `llm.py` 126 against about 80, `loop.py` 117 against about 100, `bench.py` 97 against about 100, `cli.py` 127. `llm.py` is over its budget. The budgets were not trimmed to hit.
+Layer 2 modules, against the budgets in its spec: `llm.py` 134 against about 80, `loop.py` 124 against about 100, `bench.py` 107 against about 100, `cli.py` 127. All four are over their budgets. The budgets were not trimmed to hit.
 
 
 The original assignment's guideline is about 500 lines for the whole core. The spec's own harness target was about 250. The lines went into verification, because it is the product: the spec's features (three-step compile, a TSan preflight, bounded output capture, a pure classifier, deterministic cleaning, and the sanitizer summaries) cannot be dropped without losing what the harness is for.
