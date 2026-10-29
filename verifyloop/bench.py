@@ -33,11 +33,12 @@ class Row:
     loop_visible: bool
     loop_hidden: bool
     attempts: int
+    llm_error: str | None = None  # the provider error that ended the run, if any
 
 
 def row_from(run: FixRun) -> Row:
     """Read the one-shot verdicts from attempt 1 and the loop verdicts from the final attempt."""
-    first = run.attempts[0]
+    first, last = run.attempts[0], run.attempts[-1]
     return Row(
         case=run.case_id, model=run.model, trial=run.trial,
         one_visible=first.stage == "ok",
@@ -45,6 +46,7 @@ def row_from(run: FixRun) -> Row:
         loop_visible=run.passed,
         loop_hidden=_passed(run.hidden_final),
         attempts=len(run.attempts),
+        llm_error=last.output if last.stage == "llm_error" else None,
     )
 
 
@@ -110,6 +112,14 @@ def markdown(rows: list[Row], stopped: dict | None) -> str:
             f"| {model} | {_percent(group, 'one_visible')} | {_percent(group, 'one_hidden')} "
             f"| {_percent(group, 'loop_visible')} | {_percent(group, 'loop_hidden')} |"
         )
+    errors = [r for r in rows if r.llm_error]
+    if errors:
+        lines += ["", "## Provider errors", "",
+                  "These runs stopped on a provider error. They count as failures in the tables above.", "",
+                  "| case | model | trial | error |", "|---|---|---|---|"]
+        for r in errors:
+            message = r.llm_error.splitlines()[0].replace("|", "/")
+            lines.append(f"| {r.case} | {r.model} | {r.trial} | {message} |")
     return "\n".join(lines) + "\n"
 
 

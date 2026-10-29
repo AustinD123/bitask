@@ -16,7 +16,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from verifyloop.case import Case
-from verifyloop.llm import complete
+from verifyloop.llm import DailyLimitReached, LLMError, complete
 from verifyloop.toolchain import verify
 
 RUNS_DIR = Path("out/runs")
@@ -38,7 +38,7 @@ class Attempt:
     prompt: list[dict]
     response: str
     code: str | None
-    stage: str  # a VerifyResult stage, or no_code or rejected
+    stage: str  # a VerifyResult stage, or no_code, rejected or llm_error
     output: str  # the cleaned failure output, or the reason for no_code or rejected
     usage: dict
     result: dict | None = None
@@ -101,8 +101,8 @@ def fix(
         run.attempts.append(attempt)
         if progress:
             progress(attempt)
-        if attempt.stage == "ok":
-            break
+        if attempt.stage in ("ok", "llm_error"):
+            break  # a provider error is not retried: the run ends and the bench moves on
         messages = _retry_messages(case, attempt)
     first, final = run.attempts[0], run.attempts[-1]
     run.hidden_first = _hidden(case, first)
@@ -113,7 +113,14 @@ def fix(
 
 def _attempt(case: Case, model: str, trial: int, number: int, messages: list[dict]) -> Attempt:
     """Send one prompt, extract the code, and check it against the visible test."""
-    response, usage = complete(messages, model, trial=trial)
+    try:
+        response, usage = complete(messages, model, trial=trial)
+    except DailyLimitReached:
+        raise  # the whole bench stops on the daily limit, so it is not a per-run error
+    except LLMError as error:
+        no_usage = {"prompt_tokens": 0, "completion_tokens": 0, "latency_s": 0.0, "cache_hit": False}
+        return Attempt(number=number, prompt=messages, response="", code=None, stage="llm_error",
+                       output=str(error), usage=no_usage)
     code = extract_code(response)
     base = {"number": number, "prompt": messages, "response": response, "code": code, "usage": usage}
     if code is None:
@@ -127,7 +134,7 @@ def _attempt(case: Case, model: str, trial: int, number: int, messages: list[dic
 
 def _hidden(case: Case, attempt: Attempt) -> dict | None:
     """Run the hidden test on a candidate that reached the compiler. Rejected or missing code is never run."""
-    if attempt.stage in ("no_code", "rejected"):
+    if attempt.stage in ("no_code", "rejected", "llm_error"):
         return None
     return verify(attempt.code, case, test="hidden").to_dict()
 

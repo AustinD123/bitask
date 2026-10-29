@@ -7,7 +7,7 @@ so retries are instant and nothing is written to out/.
 import pytest
 
 from verifyloop import llm
-from verifyloop.llm import DailyLimitReached, LLMError, MockProvider, RateLimited
+from verifyloop.llm import ConfigError, DailyLimitReached, LLMError, MockProvider, RateLimited
 
 MESSAGES = [{"role": "system", "content": "You fix bugs."}, {"role": "user", "content": "fix it"}]
 
@@ -94,7 +94,7 @@ def test_daily_limit_raises_at_once_without_waiting(monkeypatch, isolated) -> No
 def test_no_key_is_a_clear_error(monkeypatch) -> None:
     monkeypatch.delenv("LLM_API_KEY")
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
-    with pytest.raises(LLMError, match="no API key: set LLM_API_KEY or GROQ_API_KEY"):
+    with pytest.raises(ConfigError, match="no API key: set LLM_API_KEY or GROQ_API_KEY"):
         llm.complete(MESSAGES, "m")
 
 
@@ -129,9 +129,32 @@ def test_daily_detection() -> None:
     assert not llm._is_daily("Rate limit on tokens per minute (TPM)")
 
 
+def test_openai_sdk_error_becomes_llm_error(monkeypatch) -> None:
+    """A non-429 SDK error is an LLMError, so the fix loop can record it as one failed run."""
+    openai = pytest.importorskip("openai")
+
+    class FakeCompletions:
+        def create(self, **kwargs):
+            raise openai.APIConnectionError(request=None)  # the error only stores the request
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            self.chat = type("Chat", (), {"completions": FakeCompletions()})()
+
+    monkeypatch.setattr(openai, "OpenAI", FakeClient)
+    with pytest.raises(LLMError, match="m: provider error"):
+        llm.OpenAIBackend("https://example.test/v1").call(MESSAGES, "m", "k", {})
+
+
+def test_qwen_gets_low_effort_with_hidden_reasoning() -> None:
+    assert llm._settings("qwen/qwen3.8-27b") == {
+        "max_tokens": 4000, "reasoning_effort": "low", "reasoning_format": "hidden"}
+    assert "reasoning_effort" not in llm._settings("llama-3.1-8b-instant")
+
+
 def test_unknown_provider_is_rejected(monkeypatch) -> None:
     monkeypatch.setenv("LLM_PROVIDER", "gemini")
-    with pytest.raises(LLMError, match="unknown LLM_PROVIDER"):
+    with pytest.raises(ConfigError, match="unknown LLM_PROVIDER"):
         llm.complete(MESSAGES, "m")
 
 

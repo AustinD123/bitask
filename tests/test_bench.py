@@ -86,6 +86,26 @@ def test_daily_limit_stops_the_run_and_saves_what_was_done(monkeypatch, tmp_path
     assert "Stopped early" in (tmp_path / "results.md").read_text(encoding="utf-8")
 
 
+def test_provider_error_is_a_failed_run_and_the_bench_continues(monkeypatch, tmp_path) -> None:
+    def fake_fix(case, model, trial):
+        if trial == 1:
+            run = run_of(case, model, trial, ["llm_error"], None, None)
+            run.attempts[0].output = "a: provider error: connection reset"
+            return run
+        return run_of(case, model, trial, ["ok"], "ok", "ok")
+
+    monkeypatch.setattr(bench, "fix", fake_fix)
+    results = bench.run_bench(["c1"], ["a"], trials=2, results_dir=tmp_path)
+    assert results["stopped"] is None
+    assert len(results["rows"]) == 2
+    assert results["rows"][0]["llm_error"] == "a: provider error: connection reset"
+    assert results["rows"][0]["loop_visible"] is False
+    text = (tmp_path / "results.md").read_text(encoding="utf-8")
+    assert "## Provider errors" in text
+    assert "| c1 | a | 1 | a: provider error: connection reset |" in text
+    assert "| a | 1/2 (50%) | 1/2 (50%) | 1/2 (50%) | 1/2 (50%) |" in text
+
+
 def test_cli_bench_prints_the_resume_message(monkeypatch, capsys, tmp_path) -> None:
     def fake_fix(case, model, trial):
         raise DailyLimitReached("daily limit reached")

@@ -30,6 +30,10 @@ class LLMError(Exception):
     """The provider failed in a way that retrying will not fix."""
 
 
+class ConfigError(Exception):
+    """The setup is wrong (no API key, unknown provider). Not a per-run failure, so the fix loop lets it through."""
+
+
 class DailyLimitReached(LLMError):
     """The daily quota for this model is used up. Re-run after the UTC reset."""
 
@@ -88,6 +92,8 @@ class OpenAIBackend:
             resp = client.chat.completions.create(model=model, messages=messages, **settings)
         except openai.RateLimitError as error:
             raise RateLimited(str(error), _is_daily(str(error)), _retry_seconds(error.response.headers)) from error
+        except openai.APIError as error:
+            raise LLMError(f"{model}: provider error: {error}") from error
         usage = resp.usage
         return Reply(resp.choices[0].message.content or "",
                      usage.prompt_tokens if usage else 0, usage.completion_tokens if usage else 0)
@@ -107,6 +113,8 @@ class AnthropicBackend:
             resp = client.messages.create(model=model, max_tokens=MAX_TOKENS, system=system, messages=turns)
         except anthropic.RateLimitError as error:
             raise RateLimited(str(error), _is_daily(str(error)), _retry_seconds(error.response.headers)) from error
+        except anthropic.APIError as error:
+            raise LLMError(f"{model}: provider error: {error}") from error
         text = "".join(block.text for block in resp.content if block.type == "text")
         return Reply(text, resp.usage.input_tokens, resp.usage.output_tokens)
 
@@ -137,10 +145,13 @@ def complete(messages: list[dict], model: str, trial: int = 0) -> tuple[str, dic
 
 
 def _settings(model: str) -> dict:
-    """Request options. gpt-oss models get low reasoning effort to save tokens."""
+    """Request options. Reasoning models get low effort, and Qwen's reasoning is kept out of the reply."""
     settings = {"max_tokens": MAX_TOKENS}
     if model.startswith("openai/gpt-oss"):
         settings["reasoning_effort"] = "low"
+    if model.startswith("qwen/qwen3"):
+        settings["reasoning_effort"] = "low"
+        settings["reasoning_format"] = "hidden"
     return settings
 
 
@@ -157,14 +168,14 @@ def _backend():
         return AnthropicBackend()
     if provider == "openai":
         return OpenAIBackend(os.environ.get("LLM_BASE_URL", DEFAULT_BASE_URL))
-    raise LLMError(f"unknown LLM_PROVIDER {provider!r}; use openai or anthropic")
+    raise ConfigError(f"unknown LLM_PROVIDER {provider!r}; use openai or anthropic")
 
 
 def _key() -> str:
     """The API key: LLM_API_KEY, falling back to GROQ_API_KEY."""
     key = (os.environ.get("LLM_API_KEY") or os.environ.get("GROQ_API_KEY") or "").strip()
     if not key:
-        raise LLMError("no API key: set LLM_API_KEY or GROQ_API_KEY")
+        raise ConfigError("no API key: set LLM_API_KEY or GROQ_API_KEY")
     return key
 
 

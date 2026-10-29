@@ -12,7 +12,7 @@ import pytest
 
 from verifyloop import llm, loop
 from verifyloop.case import load_case
-from verifyloop.llm import MockProvider
+from verifyloop.llm import DailyLimitReached, LLMError, MockProvider
 
 FIXTURE = Path(__file__).parent / "fixtures" / "mini_case"
 REFERENCE = (FIXTURE / "reference_fix.c").read_text(encoding="utf-8")
@@ -79,6 +79,22 @@ def test_rejected_candidate_is_not_compiled(case, monkeypatch) -> None:
     assert "VERIFY_NONCE" in attempt.output
     assert attempt.result is None
     assert run.hidden_first is None
+
+
+def test_provider_error_ends_the_run_as_llm_error(case, monkeypatch) -> None:
+    provider = use(monkeypatch, [LLMError("m: provider error: connection reset")])
+    run = loop.fix(case, "m")
+    assert [a.stage for a in run.attempts] == ["llm_error"]
+    assert run.attempts[0].output == "m: provider error: connection reset"
+    assert not run.passed
+    assert run.hidden_first is None and run.hidden_final is None
+    assert len(provider.calls) == 1, "a provider error is not retried"
+
+
+def test_daily_limit_is_not_a_run_error(case, monkeypatch) -> None:
+    use(monkeypatch, [DailyLimitReached("daily limit reached for m")])
+    with pytest.raises(DailyLimitReached):
+        loop.fix(case, "m")
 
 
 def test_missing_code_block_fails_the_attempt(case, monkeypatch) -> None:

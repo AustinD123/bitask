@@ -21,7 +21,7 @@ from pathlib import Path
 
 from verifyloop.bench import RESULTS_DIR, Row, load_cases, run_bench
 from verifyloop.case import Case, CaseError, load_case
-from verifyloop.llm import LLMError
+from verifyloop.llm import ConfigError, LLMError
 from verifyloop.loop import Attempt, fix
 from verifyloop.toolchain import VerifyResult, verify_file
 
@@ -88,7 +88,7 @@ def fix_command(args: argparse.Namespace, colour: bool) -> int:
     try:
         case = load_case(args.case)
         run = fix(case, args.model, args.max_attempts, progress=_print_attempt)
-    except (CaseError, LLMError) as error:
+    except (CaseError, ConfigError, LLMError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
     final = run.attempts[-1]
@@ -157,7 +157,7 @@ def main(argv: list[str] | None = None) -> int:
         return bench_command(args)
     try:
         case = load_case(args.case)
-    except CaseError as error:
+    except (CaseError, ConfigError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
     source = case.directory / case.reference if args.reference else args.source or case.directory / case.editable
